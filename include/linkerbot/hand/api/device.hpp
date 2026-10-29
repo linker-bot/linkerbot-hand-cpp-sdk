@@ -98,9 +98,6 @@ namespace linkerbot::hand {
         [[nodiscard]] CommandHandle set_speeds(const std::vector<double> &values);
         [[nodiscard]] CommandHandle set_accelerations(const std::vector<double> &values);
         [[nodiscard]] CommandHandle set_current_limits(const std::vector<double> &values);
-        [[nodiscard]] CommandHandle set_position_kp(const std::vector<double> &values);
-        [[nodiscard]] CommandHandle set_position_kd(const std::vector<double> &values);
-        [[nodiscard]] CommandHandle set_torque_kd(const std::vector<double> &values);
         [[nodiscard]] CommandHandle set_stall_detection_times(const std::vector<double> &values);
         [[nodiscard]] CommandHandle set_stall_thresholds(const std::vector<double> &values);
         [[nodiscard]] CommandHandle set_stall_hold_currents(const std::vector<double> &values);
@@ -121,11 +118,6 @@ namespace linkerbot::hand {
         [[nodiscard]] CurrentLimitSample
         get_current_limits(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
         [[nodiscard]] TorqueSample get_torques(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
-        [[nodiscard]] PositionKpSample get_position_kp(std::chrono::milliseconds timeout = std::chrono::milliseconds{
-                                                           100});
-        [[nodiscard]] PositionKdSample get_position_kd(std::chrono::milliseconds timeout = std::chrono::milliseconds{
-                                                           100});
-        [[nodiscard]] TorqueKdSample get_torque_kd(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
         [[nodiscard]] TemperatureSample get_temperatures(std::chrono::milliseconds timeout = std::chrono::milliseconds{
                                                              100});
         [[nodiscard]] ForceSample get_force(std::chrono::milliseconds timeout = std::chrono::milliseconds{1000});

@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
         } else if (scenario == "ack_after_complete_response" || scenario == "execution_timeout") {
             const auto request_seen = std::make_shared<std::promise<void>>();
             transport->on_request(0x28, [request_seen](const Message &request) {
-                if (request.data[0] == 6 && request.dlc > 1) {
+                if (request.data[0] == 0xC6 && request.dlc > 1) {
                     request_seen->set_value();
                     auto partial = request;
                     partial.dlc = 2;
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
                 }
                 return l6_reply(request);
             });
-            const auto handle = hand.set_position_kp(std::vector<double>(6, targets));
+            const auto handle = hand.set_stall_thresholds(std::vector<double>(6, targets));
             require(request_seen->get_future().wait_for(2s) == std::future_status::ready, "ACK request not sent");
             if (scenario == "execution_timeout") {
                 require(handle.wait_for(2s), "execution budget did not expire");
@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
                 Message full{};
                 full.id = 0x28;
                 full.dlc = 7;
-                full.data[0] = 6;
+                full.data[0] = 0xC6;
                 // Returned settings deliberately differ from the requested values.
                 std::fill(full.data.begin() + 1, full.data.begin() + 7, uint8_t{1});
                 transport->inject(full);
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
             const auto claimed = device.block();
             std::vector<CommandHandle> pending;
             for (size_t i = 0; i < capacity; ++i) {
-                pending.push_back(hand.set_position_kp(std::vector<double>(6, i + 1)));
+                pending.push_back(hand.set_stall_thresholds(std::vector<double>(6, i + 1)));
             }
             const auto accepted = [&] {
                 uint64_t count = 0;
@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
             const auto before = accepted();
             bool full = false;
             try {
-                (void)hand.set_position_kp(std::vector<double>(6, 20));
+                (void)hand.set_stall_thresholds(std::vector<double>(6, 20));
             } catch (const QueueFullError &) {
                 full = true;
             }
@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
             }
             std::vector<int> values;
             for (const auto &frame : transport->sent()) {
-                if (frame.data[0] == 6 && frame.dlc > 1) {
+                if (frame.data[0] == 0xC6 && frame.dlc > 1) {
                     values.push_back(frame.data[1]);
                 }
             }
@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
             std::cout << R"({"wait":"false","command_cancelled":false,"stage":"dispatched"})";
         } else if (scenario == "lifecycle_invalidation") {
             const auto claimed = device.block();
-            const auto pending = hand.set_position_kp(std::vector<double>(6, targets));
+            const auto pending = hand.set_stall_thresholds(std::vector<double>(6, targets));
             auto closer = std::async(std::launch::async, [&] { hand.close(); });
             const auto ended = pending.wait_for(1s) && claimed.wait_for(1s);
             transport->release_tx_gate();
@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
             require(closed, "wrong lifecycle error");
             hand.open();
             for (const auto &frame : device.transport->sent()) {
-                require(!(frame.data[0] == 6 && frame.dlc > 1), "old configuration replayed");
+                require(!(frame.data[0] == 0xC6 && frame.dlc > 1), "old configuration replayed");
             }
             std::cout << R"({"pending":"failed+closed","claimed":"failed+closed","replay":false})";
         } else if (scenario == "polling_fairness") {

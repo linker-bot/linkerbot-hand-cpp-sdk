@@ -32,7 +32,7 @@ TEST_CASE("admission deadline boundary is independent of caller waits and a bloc
                          });
     REQUIRE(entered.get_future().wait_for(2s) == std::future_status::ready);
     std::atomic<int> executed{0};
-    auto pending = scheduler.accept({CommandSemantic::kPositionKp, {10}, 20ms, AckExpectation::kRequired},
+    auto pending = scheduler.accept({CommandSemantic::kStallThresholds, {10}, 20ms, AckExpectation::kRequired},
                                     AckSupport::kRequired, {}, [&](const auto &) {
                                         ++executed;
                                         return test_util::throw_as<CommandHandle>(

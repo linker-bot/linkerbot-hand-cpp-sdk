@@ -17,10 +17,6 @@ namespace linkerbot::hand::unified_detail {
             return CommandFamily::kAccelerationSetting;
         case CommandSemantic::kCurrentLimits:
             return CommandFamily::kCurrentLimit;
-        case CommandSemantic::kPositionKp:
-        case CommandSemantic::kPositionKd:
-        case CommandSemantic::kTorqueKd:
-            return CommandFamily::kControlGain;
         case CommandSemantic::kStallDetectionTimes:
         case CommandSemantic::kStallThresholds:
         case CommandSemantic::kStallHoldCurrents:
@@ -39,8 +35,6 @@ namespace linkerbot::hand::unified_detail {
             return "acceleration_targets";
         case CommandFamily::kCurrentLimit:
             return "current_limits";
-        case CommandFamily::kControlGain:
-            return "control_gains";
         case CommandFamily::kStallConfiguration:
             return "stall";
         case CommandFamily::kDiscreteOperation:

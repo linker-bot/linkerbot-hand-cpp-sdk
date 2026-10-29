@@ -99,15 +99,6 @@ namespace linkerbot::hand::unified_detail {
                 return ConfiguredSpeedSample{};
             }
             return projected(device, semantic);
-        case TelemetrySemantic::kPositionKp:
-            static_cast<void>(device.position_kp.get_blocking(timeout));
-            break;
-        case TelemetrySemantic::kPositionKd:
-            static_cast<void>(device.position_kd.get_blocking(timeout));
-            break;
-        case TelemetrySemantic::kTorqueKd:
-            static_cast<void>(device.torque_kd.get_blocking(timeout));
-            break;
         case TelemetrySemantic::kCurrentLimits:
             static_cast<void>(device.current_limit.get_blocking(timeout));
             break;

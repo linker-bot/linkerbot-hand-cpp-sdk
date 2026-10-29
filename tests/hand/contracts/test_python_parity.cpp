@@ -20,9 +20,6 @@ TEST_CASE("common models preserve Python telemetry freshness contracts", "[comm]
         {Model::kL6,
          {
              {TelemetrySemantic::kTorques, 3000},
-             {TelemetrySemantic::kPositionKp, 3000},
-             {TelemetrySemantic::kPositionKd, 3000},
-             {TelemetrySemantic::kTorqueKd, 3000},
              {TelemetrySemantic::kAngles, 1000.0 / 30.0},
              {TelemetrySemantic::kConfiguredSpeeds, 1000},
              {TelemetrySemantic::kCurrentLimits, 100},
@@ -123,9 +120,6 @@ TEST_CASE("common models preserve Python command ACK contracts", "[comm][contrac
         {Model::kL6,
          {
              {CommandSemantic::kAngles, AckSupport::kUnsupported},
-             {CommandSemantic::kPositionKp, AckSupport::kRequired},
-             {CommandSemantic::kPositionKd, AckSupport::kRequired},
-             {CommandSemantic::kTorqueKd, AckSupport::kRequired},
              {CommandSemantic::kSpeeds, AckSupport::kRequired},
              {CommandSemantic::kCurrentLimits, AckSupport::kRequired},
              {CommandSemantic::kStallDetectionTimes, AckSupport::kRequired},

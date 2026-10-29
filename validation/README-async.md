@@ -27,10 +27,14 @@ checkout is used when present; otherwise the installed transport is imported.
 The Python SDK is not a build dependency of the C++ library or installed consumer.
 The JSON report is written to `build/tests/async-behavior-report.json`.
 
+The C++ probe uses the retained L6 stall-threshold command for ACK and FIFO
+scenarios. The Python probe continues to use its SDK's position-Kp command; the
+vectors compare command behavior rather than requiring identical parameter APIs.
+
 The shared scenarios cover L6 admission, complete/short ACK responses, no-ACK
 sending, latest target replacement, claimed writes, FIFO capacity/order, caller
 wait timeout, execution timeout, closing, no replay and polling/cache progress.
-The full C++ regression additionally covers all eleven setters across supported
+The full C++ regression additionally covers all eight setters across supported
 models, recover/destruction, admission budgets, rate limiting and arbitration.
 The `[clock]` test injects a monotonic clock into the internal scheduler: pending
 work stays live at deadline minus 1 ms, expires exactly at the deadline without
@@ -58,7 +62,7 @@ python3 validation/check_documented_examples.py \
   --prefix /tmp/linkerbot-install --build-dir /tmp/linkerbot-doc-examples
 ```
 
-The consumer compiles all eleven setter signatures and actually checks early
+The consumer compiles all eight setter signatures and actually checks early
 return at a send barrier, independent cache reads, wait timeout without cancelling,
 no-ACK completion, configuration ACK, synchronous zero-frame validation and an
 asynchronous transport error retained on the handle. The documentation check

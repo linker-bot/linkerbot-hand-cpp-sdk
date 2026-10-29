@@ -60,17 +60,8 @@ TEST_CASE("force selectors reject malformed names before opening a device", "[co
     REQUIRE_THROWS_AS(device.get_force({"fn"}, std::chrono::milliseconds{0}), ValidationError);
 }
 
-TEST_CASE("L6 declares raw gain and response-only speed capabilities", "[comm][device][l6-controls]") {
+TEST_CASE("L6 declares response-only speed capabilities", "[comm][device][l6-controls]") {
     const auto &caps = declared_capabilities(Model::kL6, HandSide::kLeft);
-    for (const auto semantic :
-         {CommandSemantic::kPositionKp, CommandSemantic::kPositionKd, CommandSemantic::kTorqueKd}) {
-        const auto *command = caps.command(semantic);
-        REQUIRE(command != nullptr);
-        REQUIRE(command->channels.size() == 6);
-        REQUIRE(command->ack_support == AckSupport::kRequired);
-    }
-    REQUIRE(caps.command(CommandSemantic::kPositionKp)->raw_range_for(0)->maximum == 200);
-    REQUIRE(caps.command(CommandSemantic::kPositionKd)->raw_range_for(0)->contains(41));
     const auto *speed = caps.telemetry_channel(TelemetrySemantic::kConfiguredSpeeds);
     REQUIRE(speed != nullptr);
     REQUIRE(speed->read_mode == ReadMode::kCommandResponse);
@@ -685,15 +676,6 @@ TEST_CASE("HandDevice dispatches every declared non-angle command", "[comm][devi
                     break;
                 case CommandSemantic::kStallHoldCurrents:
                     handle = completed(device.set_stall_hold_currents(values));
-                    break;
-                case CommandSemantic::kPositionKp:
-                    handle = completed(device.set_position_kp(values));
-                    break;
-                case CommandSemantic::kPositionKd:
-                    handle = completed(device.set_position_kd(values));
-                    break;
-                case CommandSemantic::kTorqueKd:
-                    handle = completed(device.set_torque_kd(values));
                     break;
                 case CommandSemantic::kAngles:
                     FAIL("angle command was not filtered");
@@ -1831,7 +1813,7 @@ TEST_CASE("HandDevice recovery retries and restores polling only", "[comm][devic
 
     device.open();
     static_cast<void>(completed(device.set_angles(std::vector<int32_t>(6, 50))));
-    static_cast<void>(completed(device.set_position_kp(std::vector<double>(6, 37.0))));
+    static_cast<void>(completed(device.set_stall_thresholds(std::vector<double>(6, 37.0))));
     device.start_polling({
         {TelemetrySemantic::kAngles, std::chrono::milliseconds{10}},
     });
@@ -1848,10 +1830,10 @@ TEST_CASE("HandDevice recovery retries and restores polling only", "[comm][devic
         const auto replays_angles =
             frame.dlc == 7 && frame.data[0] == 0x01 &&
             std::all_of(frame.data.begin() + 1, frame.data.begin() + 7, [](uint8_t value) { return value == 50; });
-        const auto replays_gain =
-            frame.dlc == 7 && frame.data[0] == 0x06 &&
+        const auto replays_stall =
+            frame.dlc == 7 && frame.data[0] == 0xC6 &&
             std::all_of(frame.data.begin() + 1, frame.data.begin() + 7, [](uint8_t value) { return value == 37; });
-        return replays_angles || replays_gain;
+        return replays_angles || replays_stall;
     }));
     const auto after = device.get_snapshot();
     const auto after_identity = device.get_identity();
@@ -2016,7 +1998,7 @@ TEST_CASE("HandDevice serializes concurrent recovery stop and close", "[comm][de
     REQUIRE_NOTHROW(device.close());
 }
 
-TEST_CASE("L6 public controls preserve prior write replies and query exact raw settings",
+TEST_CASE("L6 configured speed preserves write replies without issuing a query",
           "[comm][device][l6-controls]") {
     for (const auto side : {HandSide::kLeft, HandSide::kRight}) {
         DYNAMIC_SECTION("side " << static_cast<int>(side)) {
@@ -2037,9 +2019,6 @@ TEST_CASE("L6 public controls preserve prior write replies and query exact raw s
             REQUIRE(empty_speed.raw.empty());
 
             std::array<std::array<uint8_t, 6>, 256> settings{};
-            settings[0x06].fill(50);
-            settings[0x07].fill(21);
-            settings[0x08].fill(1);
             settings[0x05].fill(128);
             transport->on_request(side == HandSide::kLeft ? 0x28 : 0x27, [&settings](const Message &request) {
                 Message reply{};
@@ -2053,54 +2032,6 @@ TEST_CASE("L6 public controls preserve prior write replies and query exact raw s
                 }
                 return std::vector<Message>{reply};
             });
-
-            struct Control {
-                uint8_t opcode;
-                CommandFamily family;
-                std::function<CommandHandle(const std::vector<double> &)> set;
-                std::function<RawVectorSample()> get;
-                std::function<RawVectorSample(const HandSnapshot &)> cached;
-            };
-            const std::array<Control, 3> controls{{
-                {0x06, CommandFamily::kControlGain, [&](const auto &v) { return completed(device.set_position_kp(v)); },
-                 [&] { return device.get_position_kp(); }, [](const auto &s) { return *s.position_kp; }},
-                {0x07, CommandFamily::kControlGain, [&](const auto &v) { return completed(device.set_position_kd(v)); },
-                 [&] { return device.get_position_kd(); }, [](const auto &s) { return *s.position_kd; }},
-                {0x08, CommandFamily::kControlGain, [&](const auto &v) { return completed(device.set_torque_kd(v)); },
-                 [&] { return device.get_torque_kd(); }, [](const auto &s) { return *s.torque_kd; }},
-            }};
-            const std::vector<double> target{0, 1, 41, 127, 199, 200};
-            for (const auto &control : controls) {
-                CAPTURE(control.opcode);
-                const auto initial = control.get();
-                REQUIRE(initial.meta.valid);
-                REQUIRE(initial.meta.origin == TelemetryValueOrigin::kDeviceConfigured);
-                REQUIRE(initial.meta.delivery == TelemetryDelivery::kQueryResponse);
-                const auto before = transport->sent().size();
-                const auto handle = completed(control.set(target));
-                REQUIRE(handle.stage() == CommandStage::kAcknowledged);
-                REQUIRE(handle.family() == control.family);
-                const auto sent = transport->sent();
-                REQUIRE(sent.size() == before + 1);
-                REQUIRE(sent.back().data[0] == control.opcode);
-                REQUIRE(sent.back().dlc == 7);
-                for (size_t index = 0; index < target.size(); ++index) {
-                    REQUIRE(sent.back().data[index + 1] == target[index]);
-                }
-                const auto cached = control.cached(device.get_snapshot());
-                REQUIRE(cached.raw == initial.raw);
-                REQUIRE(cached.meta.delivery == TelemetryDelivery::kCommandResponse);
-                REQUIRE(cached.meta.sequence > initial.meta.sequence);
-                const auto queried = control.get();
-                REQUIRE(queried.raw == target);
-                REQUIRE(queried.meta.delivery == TelemetryDelivery::kQueryResponse);
-                REQUIRE(queried.meta.sequence > cached.meta.sequence);
-                REQUIRE(control.cached(device.get_snapshot()).raw == target);
-            }
-            const auto joints = device.get_snapshot().joints;
-            REQUIRE(joints[2].position_kp_raw == 41);
-            REQUIRE(joints[2].position_kd_raw == 41);
-            REQUIRE(joints[2].torque_kd_raw == 41);
 
             const std::vector<double> speed_target{0, 1, 127, 128, 254, 255};
             REQUIRE(completed(device.set_speeds(speed_target)).stage() == CommandStage::kAcknowledged);
@@ -2120,77 +2051,6 @@ TEST_CASE("L6 public controls preserve prior write replies and query exact raw s
             device.close();
             device.open();
             REQUIRE_FALSE(device.get_configured_speeds().meta.valid);
-        }
-    }
-}
-
-TEST_CASE("L6 gain validation rejects invalid writes and preserves out-of-range readback",
-          "[comm][device][l6-controls]") {
-    FakeTransport *transport = nullptr;
-    HandDevice device(config_for(Model::kL6), [&] {
-        auto next = std::make_unique<FakeTransport>();
-        transport = next.get();
-        install_classic_identity(transport, Model::kL6);
-        return next;
-    });
-    device.open();
-    const auto before = transport->sent().size();
-    for (const auto &values :
-         {std::vector<double>(6, 201), std::vector<double>(6, -1), std::vector<double>(6, 1.5),
-          std::vector<double>(5, 50), std::vector<double>(6, std::numeric_limits<double>::quiet_NaN())}) {
-        REQUIRE_THROWS_AS(completed(device.set_position_kp(values)), ValidationError);
-    }
-    REQUIRE_THROWS_AS(completed(device.set_position_kd(std::vector<double>(6, 256))), ValidationError);
-    REQUIRE_THROWS_AS(completed(device.set_torque_kd(std::vector<double>(6, -1))), ValidationError);
-    REQUIRE(transport->sent().size() == before);
-    transport->on_request(0x28, [](const Message &request) {
-        auto replies = classic_angle_reply(Model::kL6, request);
-        std::fill_n(replies[0].data.begin() + 1, 6, 255);
-        return replies;
-    });
-    const auto sample = device.get_position_kp();
-    REQUIRE(sample.raw == std::vector<double>(6, 255));
-    REQUIRE(sample.meta.valid);
-    REQUIRE_FALSE(sample.meta.within_declared_range);
-    REQUIRE_FALSE(device.get_snapshot().position_kp->meta.within_declared_range);
-    REQUIRE_NOTHROW(completed(device.set_position_kd(std::vector<double>(6, 255))));
-    REQUIRE_NOTHROW(completed(device.set_torque_kd(std::vector<double>(6, 0))));
-}
-
-TEST_CASE("L6 raw controls reject unrelated and incomplete replies", "[comm][device][l6-controls]") {
-    auto config = config_for(Model::kL6);
-    config.command_timeout = std::chrono::milliseconds{30};
-    for (const auto kind : {0, 1, 2, 3, 4}) {
-        DYNAMIC_SECTION("invalid reply " << kind) {
-            FakeTransport *transport = nullptr;
-            HandDevice device(config, [&] {
-                auto next = std::make_unique<FakeTransport>();
-                transport = next.get();
-                install_classic_identity(transport, Model::kL6);
-                return next;
-            });
-            device.open();
-            transport->on_request(0x28, [kind](const Message &request) {
-                if (kind == 4) {
-                    return std::vector<Message>{};
-                }
-                auto replies = classic_angle_reply(Model::kL6, request);
-                if (kind == 0) {
-                    replies[0].data[0] = 0x07;
-                }
-                if (kind == 1) {
-                    replies[0].dlc = 6;
-                }
-                if (kind == 2) {
-                    replies[0].id = 0x27;
-                }
-                if (kind == 3) {
-                    replies[0].is_fd = true;
-                }
-                return replies;
-            });
-            REQUIRE_THROWS_AS(completed(device.set_position_kp(std::vector<double>(6, 50))), TimeoutError);
-            REQUIRE_FALSE(device.get_snapshot().position_kp.has_value());
         }
     }
 }
@@ -2571,8 +2431,8 @@ TEST_CASE("HandDevice caches and command admission stay available while an ACK i
     });
     const auto available = cached.wait_for(std::chrono::milliseconds{300}) == std::future_status::ready;
     const auto cache_ok = available ? cached.get() : false;
-    auto gain = std::async(std::launch::async, [&] { return device.set_position_kp(std::vector<double>(6, 40)); });
-    const auto independent = gain.wait_for(std::chrono::milliseconds{300}) == std::future_status::ready;
+    auto stall = std::async(std::launch::async, [&] { return device.set_stall_thresholds(std::vector<double>(6, 40)); });
+    const auto independent = stall.wait_for(std::chrono::milliseconds{300}) == std::future_status::ready;
     Message reply{};
     reply.id = 0x28;
     reply.dlc = 7;
@@ -2580,7 +2440,7 @@ TEST_CASE("HandDevice caches and command admission stay available while an ACK i
     std::fill_n(reply.data.begin() + 1, 6, 100);
     transport->inject(reply);
     (void)completed(speed.get());
-    (void)completed(gain.get());
+    (void)completed(stall.get());
     if (!available) {
         (void)cached.get();
     }
@@ -2845,7 +2705,7 @@ TEST_CASE("HandDevice re-verification exposes state without waiting for identity
     REQUIRE(device.get_health().identity_verified);
 }
 
-TEST_CASE("M2 all eleven setters return before their transport send completes", "[comm][device][m2]") {
+TEST_CASE("M2 all eight setters return before their transport send completes", "[comm][device][m2]") {
     using Setter = CommandHandle (HandDevice::*)(const std::vector<double> &);
     struct Item {
         Model model;
@@ -2856,9 +2716,6 @@ TEST_CASE("M2 all eleven setters return before their transport send completes", 
         {Model::kL6, CommandSemantic::kSpeeds, &HandDevice::set_speeds},
         {Model::kO6, CommandSemantic::kAccelerations, &HandDevice::set_accelerations},
         {Model::kL6, CommandSemantic::kCurrentLimits, &HandDevice::set_current_limits},
-        {Model::kL6, CommandSemantic::kPositionKp, &HandDevice::set_position_kp},
-        {Model::kL6, CommandSemantic::kPositionKd, &HandDevice::set_position_kd},
-        {Model::kL6, CommandSemantic::kTorqueKd, &HandDevice::set_torque_kd},
         {Model::kL6, CommandSemantic::kStallDetectionTimes, &HandDevice::set_stall_detection_times},
         {Model::kL6, CommandSemantic::kStallThresholds, &HandDevice::set_stall_thresholds},
         {Model::kL6, CommandSemantic::kStallHoldCurrents, &HandDevice::set_stall_hold_currents},
@@ -2947,7 +2804,7 @@ TEST_CASE("M2 percent and raw angles share a copied latest slot", "[comm][device
     }
     const auto admitted_after = device.get_health().command_families;
     const auto old_preserved = old.stage() == CommandStage::kAccepted;
-    auto fifo = device.set_position_kp(std::vector<double>(6, 30));
+    auto fifo = device.set_stall_thresholds(std::vector<double>(6, 30));
     auto percent = std::vector<float>(6, 50);
     auto newest = device.set_percent_angles(percent);
     std::fill(percent.begin(), percent.end(), 0);
@@ -2965,7 +2822,7 @@ TEST_CASE("M2 percent and raw angles share a copied latest slot", "[comm][device
     REQUIRE(admitted_before.front().accepted == admitted_after.front().accepted);
     REQUIRE(before.pending_commands() == 3);
     const auto sent = transport->sent();
-    REQUIRE(sent[sent.size() - 2].data[0] == 0x06); // New latest gets a new sequence.
+    REQUIRE(sent[sent.size() - 2].data[0] == 0xC6); // New latest gets a new sequence.
     const auto expected = percent_to_raw_angles(std::vector<double>(6, 50), device.get_capabilities());
     REQUIRE(sent.back().data[0] == 0x01);
     for (size_t i = 0; i < 6; ++i) {
@@ -3050,7 +2907,7 @@ TEST_CASE("Command receipts expose dispatch while ACK waiters remain pending", "
     Message reply{};
     reply.id = 0x28;
     reply.dlc = 7;
-    reply.data[0] = 0x06; // unrelated gain ACK
+    reply.data[0] = 0xC6; // unrelated stall ACK
     std::fill_n(reply.data.begin() + 1, 6, 80);
     transport->inject(reply);
     REQUIRE_FALSE(handle.wait_for(std::chrono::milliseconds{20}));
@@ -3583,7 +3440,7 @@ TEST_CASE("Close preserves completed success and terminates ACK waiters without 
     transport->on_request(0x28, [](const Message &) { return std::vector<Message>{}; });
     auto active = device.set_speeds(std::vector<double>(6, 80));
     REQUIRE(wait_until([&] { return active.stage() == CommandStage::kDispatched; }));
-    auto queued = device.set_position_kp(std::vector<double>(6, 30));
+    auto queued = device.set_stall_thresholds(std::vector<double>(6, 30));
     auto waiter1 = std::async(std::launch::async, [active] { return active.wait(); });
     auto waiter2 = std::async(std::launch::async, [queued] { return queued.wait(); });
     device.close();
@@ -3620,7 +3477,7 @@ TEST_CASE("Recover cancels old ACK and pending work before identity and baseline
     transport->on_request(0x28, [](const Message &) { return std::vector<Message>{}; });
     auto active = device.set_speeds(std::vector<double>(6, 80));
     REQUIRE(wait_until([&] { return active.stage() == CommandStage::kDispatched; }));
-    auto queued = device.set_position_kp(std::vector<double>(6, 30));
+    auto queued = device.set_stall_thresholds(std::vector<double>(6, 30));
     auto recovery = std::async(std::launch::async, [&] { device.recover(); });
     const bool factory_ran = wait_until([&] { return opens.load() > 1; });
     auto *replacement = transport;
@@ -3652,7 +3509,7 @@ TEST_CASE("Recover cancels old ACK and pending work before identity and baseline
     REQUIRE_FALSE(after.configured_speeds);
     REQUIRE(device.get_health().identity_verified);
     for (const auto &message : replacement->sent()) {
-        REQUIRE_FALSE((message.data[0] == 0x05 || message.data[0] == 0x06));
+        REQUIRE_FALSE((message.data[0] == 0x05 || message.data[0] == 0xC6));
     }
     auto new_command = completed(device.set_speeds(std::vector<double>(6, 20)));
     REQUIRE(new_command.command_id() > queued.command_id());
@@ -3676,7 +3533,7 @@ TEST_CASE("Recovery timeout cannot publish Ready after a claimed send eventually
     SendGateGuard gate{old};
     auto active = device.set_speeds(std::vector<double>(6, 80));
     const bool entered = old->wait_until_tx_entered(std::chrono::seconds{2});
-    auto queued = device.set_position_kp(std::vector<double>(6, 30));
+    auto queued = device.set_stall_thresholds(std::vector<double>(6, 30));
     auto recovery = std::async(std::launch::async, [&] {
         try {
             device.recover();
@@ -3732,7 +3589,7 @@ TEST_CASE("Handles outlive facade destruction while claimed I O resources remain
     SendGateGuard gate{transport};
     auto active = device->set_speeds(std::vector<double>(6, 80));
     const bool entered = transport->wait_until_tx_entered(std::chrono::seconds{2});
-    auto queued = device->set_position_kp(std::vector<double>(6, 30));
+    auto queued = device->set_stall_thresholds(std::vector<double>(6, 30));
     auto destroying = std::async(std::launch::async, [&] { device.reset(); });
     const bool bounded = destroying.wait_for(std::chrono::milliseconds{700}) == std::future_status::ready;
     const bool terminal =

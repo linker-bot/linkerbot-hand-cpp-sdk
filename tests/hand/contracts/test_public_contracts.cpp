@@ -14,6 +14,7 @@
 #include <linkerbot/hand/conversion.hpp>
 #include <linkerbot/hand/errors.hpp>
 #include <linkerbot/hand/l30/l30.hpp>
+#include <linkerbot/hand/l6/l6.hpp>
 #include <linkerbot/hand/o30/o30.hpp>
 
 #include "../../../src/hand/unified/detail/command_handle_access.hpp"
@@ -34,6 +35,12 @@ namespace {
     ASSERT_REMOVED_METHOD(get_motion_times);
     ASSERT_REMOVED_METHOD(set_torques_limits);
     ASSERT_REMOVED_METHOD(get_torques_limits);
+    ASSERT_REMOVED_METHOD(set_position_kp);
+    ASSERT_REMOVED_METHOD(get_position_kp);
+    ASSERT_REMOVED_METHOD(set_position_kd);
+    ASSERT_REMOVED_METHOD(get_position_kd);
+    ASSERT_REMOVED_METHOD(set_torque_kd);
+    ASSERT_REMOVED_METHOD(get_torque_kd);
 #undef ASSERT_REMOVED_METHOD
 
 #define ASSERT_REMOVED_MEMBER(Type, Name)                                                                              \
@@ -52,6 +59,15 @@ namespace {
     ASSERT_REMOVED_MEMBER(JointState, motion_time_raw);
     ASSERT_REMOVED_MEMBER(o30::Snapshot, torque_limit);
     ASSERT_REMOVED_MEMBER(o30::Snapshot, motion_time);
+    ASSERT_REMOVED_MEMBER(HandSnapshot, position_kp);
+    ASSERT_REMOVED_MEMBER(HandSnapshot, position_kd);
+    ASSERT_REMOVED_MEMBER(HandSnapshot, torque_kd);
+    ASSERT_REMOVED_MEMBER(JointState, position_kp_raw);
+    ASSERT_REMOVED_MEMBER(JointState, position_kd_raw);
+    ASSERT_REMOVED_MEMBER(JointState, torque_kd_raw);
+    static_assert(Has_position_kp<l6::L6>::value && Has_position_kp<l6::Snapshot>::value);
+    static_assert(Has_position_kd<l6::L6>::value && Has_position_kd<l6::Snapshot>::value);
+    static_assert(Has_torque_kd<l6::L6>::value && Has_torque_kd<l6::Snapshot>::value);
 #undef ASSERT_REMOVED_MEMBER
 
 #define ASSERT_REMOVED_ENUM(Type, Name)                                                                                \
@@ -67,6 +83,13 @@ namespace {
     static_assert(!Has_kTorqueLimit<o30::SensorSource>::value);
     ASSERT_REMOVED_ENUM(CommandFamily, kMotionTimeSetting);
     ASSERT_REMOVED_ENUM(o30::SensorSource, kMotionTime);
+    ASSERT_REMOVED_ENUM(CommandSemantic, kPositionKp);
+    ASSERT_REMOVED_ENUM(CommandSemantic, kPositionKd);
+    ASSERT_REMOVED_ENUM(CommandSemantic, kTorqueKd);
+    static_assert(!Has_kPositionKp<TelemetrySemantic>::value);
+    static_assert(!Has_kPositionKd<TelemetrySemantic>::value);
+    static_assert(!Has_kTorqueKd<TelemetrySemantic>::value);
+    ASSERT_REMOVED_ENUM(CommandFamily, kControlGain);
 #undef ASSERT_REMOVED_ENUM
 
     template <typename T, typename = void> struct HasCalibrationManager : std::false_type {};
@@ -75,6 +98,9 @@ namespace {
     static_assert(!Has_calibrate<OperationCapabilities>::value);
 
     // Removed enum values remain unused; surviving values must not shift.
+    static_assert(static_cast<uint8_t>(CommandSemantic::kCurrentLimits) == 3);
+    static_assert(static_cast<uint8_t>(TelemetrySemantic::kCurrentLimits) == 8);
+    static_assert(static_cast<uint8_t>(CommandFamily::kCurrentLimit) == 3);
     static_assert(static_cast<uint8_t>(CommandSemantic::kStallDetectionTimes) == 10);
     static_assert(static_cast<uint8_t>(CommandSemantic::kStallHoldCurrents) == 12);
     static_assert(static_cast<uint8_t>(TelemetrySemantic::kTorques) == 10);
@@ -86,6 +112,20 @@ namespace {
     static_assert(static_cast<uint8_t>(o30::SensorSource::kStallTime) == 10);
     static_assert(static_cast<uint8_t>(o30::SensorSource::kAllForceSensors) == 13);
     static_assert(static_cast<uint8_t>(DeviceOperation::kSaveParameters) == 5);
+}
+
+TEST_CASE("removed unified L6 gain IDs are unsupported on every model", "[comm][contract][capabilities]") {
+    for (const auto model : supported_models()) {
+        for (const auto side : {HandSide::kLeft, HandSide::kRight}) {
+            const auto &caps = declared_capabilities(model, side);
+            for (const auto id : {4, 5, 6}) {
+                REQUIRE_FALSE(caps.supports(static_cast<CommandSemantic>(id)));
+            }
+            for (const auto id : {5, 6, 7}) {
+                REQUIRE_FALSE(caps.supports(static_cast<TelemetrySemantic>(id)));
+            }
+        }
+    }
 }
 
 TEST_CASE("public contract: supported models are explicit and stable", "[contract]") {

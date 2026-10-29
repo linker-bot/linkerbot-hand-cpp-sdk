@@ -21,7 +21,7 @@ TEST_CASE("L6 HOP explicit capabilities preserve classic default", "[comm][l6-ho
     REQUIRE(profile.force_field("fn").supported == std::nullopt);
     REQUIRE(declared_capabilities(Model::kL6).joints[0].raw_angle_range.maximum == 255);
     REQUIRE_FALSE(profile.supports(DeviceOperation::kClearFaults));
-    REQUIRE_FALSE(profile.supports(CommandSemantic::kPositionKp));
+    REQUIRE_FALSE(profile.supports(CommandSemantic::kStallThresholds));
     cfg.model = Model::kO6;
     REQUIRE_THROWS_AS(HandDevice(cfg), ValidationError);
     cfg = config();
@@ -52,7 +52,7 @@ TEST_CASE("L6 HOP unified open reads u16 values and preserves identity version",
     REQUIRE(device.get_current_limits().raw[5] == 6);
     REQUIRE(device.get_configured_speeds().meta.origin == TelemetryValueOrigin::kDeviceConfigured);
     REQUIRE(device.get_temperatures().raw[0] == 1);
-    REQUIRE_THROWS_AS(device.set_position_kp({1, 1, 1, 1, 1, 1}), UnsupportedOperationError);
+    REQUIRE_THROWS_AS(device.set_stall_thresholds({1, 1, 1, 1, 1, 1}), UnsupportedOperationError);
     REQUIRE_THROWS_AS(device.clear_faults(), UnsupportedOperationError);
     const auto snapshot = device.get_snapshot();
     REQUIRE(snapshot.joints.size() == 6);

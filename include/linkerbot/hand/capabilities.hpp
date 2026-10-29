@@ -60,9 +60,7 @@ namespace linkerbot::hand {
         kSpeeds,
         kAccelerations,
         kCurrentLimits,
-        kPositionKp,
-        kPositionKd,
-        kTorqueKd,
+        // Values 4..6 belonged to removed unified L6 gains.
         // Values 7..9 belonged to removed torque-limit, torque-target and motion-time commands.
         kStallDetectionTimes = 10,
         kStallThresholds,
@@ -75,10 +73,8 @@ namespace linkerbot::hand {
         kConfiguredSpeeds,
         kConfiguredAccelerations,
         kCurrents,
-        kPositionKp,
-        kPositionKd,
-        kTorqueKd,
-        kCurrentLimits,
+        // Values 5..7 belonged to removed unified L6 gains.
+        kCurrentLimits = 8,
         // Value 9 belonged to removed torque-limit telemetry.
         kTorques = 10,
         kTemperatures,

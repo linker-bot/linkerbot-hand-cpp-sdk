@@ -37,9 +37,6 @@ namespace {
     LINKERBOT_ASSERT_SETTER(set_speeds);
     LINKERBOT_ASSERT_SETTER(set_accelerations);
     LINKERBOT_ASSERT_SETTER(set_current_limits);
-    LINKERBOT_ASSERT_SETTER(set_position_kp);
-    LINKERBOT_ASSERT_SETTER(set_position_kd);
-    LINKERBOT_ASSERT_SETTER(set_torque_kd);
     LINKERBOT_ASSERT_SETTER(set_stall_detection_times);
     LINKERBOT_ASSERT_SETTER(set_stall_thresholds);
     LINKERBOT_ASSERT_SETTER(set_stall_hold_currents);
@@ -60,7 +57,7 @@ namespace {
         validation::complete(handle);
         validation::require(handle.stage() == linkerbot::hand::CommandStage::kDispatched,
                             "installed no-ACK command has wrong terminal stage");
-        validation::complete(device.hand.set_position_kp(std::vector<double>(6, 10)));
+        validation::complete(device.hand.set_stall_thresholds(std::vector<double>(6, 10)));
 
         const auto before = device.transport->sent().size();
         bool rejected = false;

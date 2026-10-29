@@ -40,31 +40,24 @@ TEST_CASE("L30 configured speed snapshots preserve command origin and freshness"
             .configured_speeds->meta.stale);
 }
 
-TEST_CASE("L6 control snapshots retain raw evidence sequence and cache freshness",
+TEST_CASE("L6 configured speed snapshots retain raw evidence sequence and cache freshness",
           "[comm][device][snapshot][l6-controls]") {
     const auto now = std::chrono::steady_clock::now();
     l6::Snapshot source{};
     source.timestamp = now;
     l6::RawControlData control{};
     control.values.fill(255);
-    control.timestamp = now - std::chrono::seconds{4};
     control.sequence = 17;
-    source.position_kp = control;
     control.command_response = true;
     control.timestamp = now - std::chrono::seconds{2};
     source.configured_speeds = control;
-    source.position_kd = control;
     const auto snapshot = unified_detail::unified_snapshot(source, Model::kL6, HandSide::kLeft,
                                                            declared_capabilities(Model::kL6, HandSide::kLeft));
-    REQUIRE(snapshot.position_kp->raw == std::vector<double>(6, 255));
-    REQUIRE(snapshot.position_kp->meta.sequence == 17);
-    REQUIRE(snapshot.position_kp->meta.valid);
-    REQUIRE_FALSE(snapshot.position_kp->meta.within_declared_range);
-    REQUIRE(snapshot.position_kp->meta.stale);
+    REQUIRE(snapshot.configured_speeds->raw == std::vector<double>(6, 255));
+    REQUIRE(snapshot.configured_speeds->meta.sequence == 17);
+    REQUIRE(snapshot.configured_speeds->meta.valid);
     REQUIRE(snapshot.configured_speeds->meta.stale);
     REQUIRE(snapshot.configured_speeds->meta.delivery == TelemetryDelivery::kCommandResponse);
-    REQUIRE_FALSE(snapshot.position_kd->meta.stale);
-    REQUIRE(snapshot.joints[0].position_kp_raw == 255);
     REQUIRE(snapshot.joints[0].configured_speed_raw == 255);
 }
 

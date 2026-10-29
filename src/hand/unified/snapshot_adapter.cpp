@@ -340,9 +340,6 @@ namespace linkerbot::hand::unified_detail {
                 joint.configured_acceleration_raw = typed_value_at(snapshot.configured_accelerations, index);
                 joint.current_raw = typed_value_at(snapshot.currents, index);
                 joint.current_limit_raw = typed_value_at(snapshot.current_limits, index);
-                joint.position_kp_raw = typed_value_at(snapshot.position_kp, index);
-                joint.position_kd_raw = typed_value_at(snapshot.position_kd, index);
-                joint.torque_kd_raw = typed_value_at(snapshot.torque_kd, index);
                 joint.torque_raw = typed_value_at(snapshot.torques, index);
                 joint.temperature_raw = typed_value_at(snapshot.temperatures, index);
                 joint.voltage_raw = typed_value_at(snapshot.voltages, index);
@@ -400,18 +397,6 @@ namespace linkerbot::hand::unified_detail {
         if (source.configured_speeds) {
             result.configured_speeds = l6_control_sample<ConfiguredSpeedSample>(*source.configured_speeds, capabilities,
                                                                                 TelemetrySemantic::kConfiguredSpeeds);
-        }
-        if (source.position_kp) {
-            result.position_kp =
-                l6_control_sample<PositionKpSample>(*source.position_kp, capabilities, TelemetrySemantic::kPositionKp);
-        }
-        if (source.position_kd) {
-            result.position_kd =
-                l6_control_sample<PositionKdSample>(*source.position_kd, capabilities, TelemetrySemantic::kPositionKd);
-        }
-        if (source.torque_kd) {
-            result.torque_kd =
-                l6_control_sample<TorqueKdSample>(*source.torque_kd, capabilities, TelemetrySemantic::kTorqueKd);
         }
         if (source.current) {
             result.currents =
@@ -724,9 +709,6 @@ namespace linkerbot::hand::unified_detail {
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kConfiguredAccelerations, configured_accelerations);
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kCurrents, currents);
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kCurrentLimits, current_limits);
-            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kPositionKp, position_kp);
-            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kPositionKd, position_kd);
-            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kTorqueKd, torque_kd);
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kTorques, torques);
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kTemperatures, temperatures);
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kForce, force);

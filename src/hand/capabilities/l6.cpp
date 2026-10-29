@@ -32,15 +32,6 @@ namespace linkerbot::hand::capabilities_detail {
                 command(CommandSemantic::kCurrentLimits, names, u8, "u8", "count",
                         "1400/255 mA per count; maximum motor-current setting", Confidence::kDocumented,
                         AckSupport::kRequired),
-                command(CommandSemantic::kPositionKp, names, {0, 200, true, 1}, "u8", "count",
-                        "position mode only; actual Kp = raw * 10; default raw 50 (Kp 500)", Confidence::kConflicting,
-                        AckSupport::kRequired),
-                command(CommandSemantic::kPositionKd, names, u8, "u8", "count",
-                        "position mode only; default 21; at most 40 recommended, not a hard limit",
-                        Confidence::kConflicting, AckSupport::kRequired),
-                command(CommandSemantic::kTorqueKd, names, u8, "u8", "count",
-                        "torque mode only; default 1; physical scale is undocumented", Confidence::kConflicting,
-                        AckSupport::kRequired),
                 command(CommandSemantic::kStallDetectionTimes, names, {1, 255, true, 1}, "u8", "count",
                         "10 ms per count; writing raw 0 has no effect", Confidence::kDocumented, AckSupport::kRequired),
                 command(CommandSemantic::kStallThresholds, names, u8, "u8", "count",
@@ -54,16 +45,6 @@ namespace linkerbot::hand::capabilities_detail {
                 telemetry(TelemetrySemantic::kConfiguredSpeeds, names, ReadMode::kCommandResponse, "u8",
                           {l6::kJointCount}, u8, "count", "step-mode speed setting; not measured RPM",
                           Confidence::kDocumented, false, false),
-                telemetry(TelemetrySemantic::kPositionKp, names, ReadMode::kQuery, "u8", {l6::kJointCount},
-                          NumericRange{0, 200, true, 1}, "count",
-                          "position mode only; actual Kp = raw * 10; default raw 50 (Kp 500)", Confidence::kConflicting,
-                          false),
-                telemetry(TelemetrySemantic::kPositionKd, names, ReadMode::kQuery, "u8", {l6::kJointCount}, u8, "count",
-                          "position mode only; default 21; at most 40 recommended, not a hard limit",
-                          Confidence::kConflicting, false),
-                telemetry(TelemetrySemantic::kTorqueKd, names, ReadMode::kQuery, "u8", {l6::kJointCount}, u8, "count",
-                          "torque mode only; default 1; physical scale is undocumented", Confidence::kConflicting,
-                          false),
                 telemetry(TelemetrySemantic::kCurrentLimits, names, ReadMode::kQuery, "u8", {l6::kJointCount}, u8,
                           "count", "1400/255 mA per count", Confidence::kDocumented, false),
                 telemetry(TelemetrySemantic::kTorques, names, ReadMode::kQuery, "u8", {l6::kJointCount}, u8, "count",
@@ -87,9 +68,6 @@ namespace linkerbot::hand::capabilities_detail {
             for (auto &channel : profile.telemetry) {
                 switch (channel.semantic) {
                 case TelemetrySemantic::kTorques:
-                case TelemetrySemantic::kPositionKp:
-                case TelemetrySemantic::kPositionKd:
-                case TelemetrySemantic::kTorqueKd:
                 case TelemetrySemantic::kTemperatures:
                 case TelemetrySemantic::kStallDetectionTimes:
                 case TelemetrySemantic::kStallThresholds:

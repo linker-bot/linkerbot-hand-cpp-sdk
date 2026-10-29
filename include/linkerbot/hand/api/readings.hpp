@@ -69,9 +69,6 @@ namespace linkerbot::hand {
     LINKERBOT_HAND_RAW_VECTOR_SAMPLE(ConfiguredAccelerationSample);
     LINKERBOT_HAND_RAW_VECTOR_SAMPLE(CurrentSample);
     LINKERBOT_HAND_RAW_VECTOR_SAMPLE(CurrentLimitSample);
-    LINKERBOT_HAND_RAW_VECTOR_SAMPLE(PositionKpSample);
-    LINKERBOT_HAND_RAW_VECTOR_SAMPLE(PositionKdSample);
-    LINKERBOT_HAND_RAW_VECTOR_SAMPLE(TorqueKdSample);
     LINKERBOT_HAND_RAW_VECTOR_SAMPLE(TorqueSample);
     LINKERBOT_HAND_RAW_VECTOR_SAMPLE(TemperatureSample);
     LINKERBOT_HAND_RAW_VECTOR_SAMPLE(VoltageSample);

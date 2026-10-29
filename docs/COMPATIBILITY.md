@@ -6,6 +6,12 @@ consumers. Actual torque reads and current-limit reads/writes remain available;
 surviving public enum values retain their numeric IDs. Dated acceptance records
 refer to the SDK revision recorded in each report, before this removal.
 
+L6 position Kp, position Kd and torque Kd are available only through the native
+`l6::L6` managers (`position_kp`, `position_kd`, `torque_kd`). Their unified setters,
+getters, samples, snapshot fields, events and capability entries have been removed.
+Migrate to each manager's `set_values()`, `get_blocking()` and `get_snapshot()` and
+rebuild consumers. Native protocol and raw-value semantics are unchanged.
+
 The 0.3.0 validation baseline is Ubuntu 24.04 x86_64 / GCC 13 / C++17 and
 Windows 11 x64 / Visual Studio 2022 / MSVC v143 14.44 / C++17. Other operating
 systems, architectures, toolchains and driver versions are not covered by this
@@ -41,6 +47,10 @@ Vendor drivers and DLLs are obtained separately. See the source repository's
 未发布的 0.3.0 已删除 O30 运动时间和扭矩上限的读写接口、型号入口、样本、事件及快照字段。
 旧调用须移除并重新编译；实际扭矩读取与电流上限读写保留，其余公开枚举编号保持不变。
 历史实机验收以各报告记录的 SDK 版本为准，不代表删除后的接口清单。
+
+L6 位置 Kp、位置 Kd、扭矩 Kd 仅通过 `l6::L6` 的专有 Manager 提供。
+对应的统一读写方法、样本、快照字段、事件及能力描述已删除；调用方须迁移到 Manager 的
+`set_values()`、`get_blocking()`、`get_snapshot()` 并重新编译。原生协议及原始值语义保持不变。
 
 `0.3.0` 验证基线为 Ubuntu 24.04 x86_64 / GCC 13 / C++17，以及 Windows 11 x64 /
 Visual Studio 2022 / MSVC v143 14.44 / C++17。其他系统、架构、工具链及驱动版本不在

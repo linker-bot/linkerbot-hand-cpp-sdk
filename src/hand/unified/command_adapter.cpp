@@ -156,15 +156,6 @@ namespace linkerbot::hand::unified_detail {
         case CommandSemantic::kSpeeds:
             device.speed.set_raw_speeds(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
             return {1, true};
-        case CommandSemantic::kPositionKp:
-            device.position_kp.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
-            return {1, true};
-        case CommandSemantic::kPositionKd:
-            device.position_kd.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
-            return {1, true};
-        case CommandSemantic::kTorqueKd:
-            device.torque_kd.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
-            return {1, true};
         case CommandSemantic::kCurrentLimits:
             return l6_acknowledged_write(device, l6::kCurrentLimitOpcode, false, request);
         case CommandSemantic::kStallDetectionTimes:

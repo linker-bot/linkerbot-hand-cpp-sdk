@@ -74,8 +74,8 @@ TEST_CASE("M2 latest slots preserve new sequence and FIFO semantic order", "[com
     auto old = scheduler.accept(request(CommandSemantic::kAngles, 2), AckSupport::kUnsupported, {}, execute);
     std::vector<CommandHandle> retained;
     for (const auto semantic :
-         {CommandSemantic::kAccelerations, CommandSemantic::kAccelerations, CommandSemantic::kPositionKp,
-          CommandSemantic::kPositionKd, CommandSemantic::kStallDetectionTimes, CommandSemantic::kStallThresholds,
+         {CommandSemantic::kAccelerations, CommandSemantic::kAccelerations, CommandSemantic::kStallThresholds,
+          CommandSemantic::kStallHoldCurrents, CommandSemantic::kStallDetectionTimes, CommandSemantic::kStallThresholds,
           CommandSemantic::kStallHoldCurrents}) {
         retained.push_back(scheduler.accept(request(semantic, retained.size()), AckSupport::kUnsupported, {}, execute));
     }
@@ -102,8 +102,8 @@ TEST_CASE("M2 latest slots preserve new sequence and FIFO semantic order", "[com
     REQUIRE(executed.size() == 11);
     REQUIRE(executed[1] == std::make_pair(CommandSemantic::kAccelerations, 0.0));
     REQUIRE(executed[2] == std::make_pair(CommandSemantic::kAccelerations, 1.0));
-    REQUIRE(executed[3].first == CommandSemantic::kPositionKp);
-    REQUIRE(executed[4].first == CommandSemantic::kPositionKd);
+    REQUIRE(executed[3].first == CommandSemantic::kStallThresholds);
+    REQUIRE(executed[4].first == CommandSemantic::kStallHoldCurrents);
     REQUIRE(executed[8] == std::make_pair(CommandSemantic::kAngles, 3.0));
     const auto done = totals(scheduler.metrics());
     REQUIRE(done.accepted == 14);
@@ -133,7 +133,7 @@ TEST_CASE("M2 FIFO capacity excludes latest and executing requests", "[comm][m2]
         handles.push_back(scheduler.accept(request(CommandSemantic::kAccelerations, i), AckSupport::kUnsupported, {},
                                            [](const auto &) { return delivered(); }));
     }
-    REQUIRE_THROWS_AS(scheduler.accept(request(CommandSemantic::kPositionKd, 20), AckSupport::kUnsupported, {},
+    REQUIRE_THROWS_AS(scheduler.accept(request(CommandSemantic::kStallHoldCurrents, 20), AckSupport::kUnsupported, {},
                                        [](const auto &) { return delivered(); }),
                       QueueFullError);
     for (const auto semantic : {CommandSemantic::kAngles, CommandSemantic::kSpeeds, CommandSemantic::kCurrentLimits}) {

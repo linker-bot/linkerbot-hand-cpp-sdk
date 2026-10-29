@@ -25,7 +25,7 @@ Manager 通常由型号对象创建和管理，业务代码通过 `hand.angle` �
 | 数据类型 | 统一的 vector、样本与快照结构 | 型号专有结构和固定长度 array |
 | 执行结果 | 统一 setter 返回 `CommandHandle` | 可能发送后返回，或同步等待回复；以各方法为准 |
 | 生命周期 | 构造后 `open()`，结束时 `close()` | 通常在构造时建立资源，结束时 `stop()` |
-| 高级功能 | 暴露已统一的增益、堵转等能力 | 还可访问地址、预设、服务字段等专有功能 |
+| 高级功能 | 暴露已统一的限流、堵转等能力 | 还可访问地址、预设、服务字段等专有功能 |
 
 需要统一业务接口时选择 `HandDevice`；需要专有操作时选择型号对象及其 Manager。
 同一设备选择一条控制路径，不要同时创建两个对象竞争其请求与回复。
@@ -233,7 +233,6 @@ Manager 成员存在不代表当前固件支持其所有操作。统一接口检
 | 速度、电流上限 | `set_speeds()`、`set_current_limits()` | 六型号；`speed`、`current_limit`（O30 限流使用 `current`） |
 | 加速度 | `set_accelerations()` | O6、L20 Lite、O30：`acceleration` |
 | 扭矩读取 | `get_torques()` | L6：`torque`；O30：`torque.get_torques()` |
-| 位置与扭矩增益 | `set_position_kp()`、`set_position_kd()`、`set_torque_kd()` 及对应 getter | L6：`position_kp`、`position_kd`、`torque_kd` 的 `set_values()`、`get_blocking()` |
 | 堵转保护 | `set_stall_detection_times()`、`set_stall_thresholds()`、`set_stall_hold_currents()` 及对应 getter | L6、O6、L20 Lite、O30：`stall`；Manager 参数单位随型号变化 |
 | 清故障 | `clear_faults()` | L6、L20：`fault.clear_faults()` |
 | 使能、失能 | `enable()`、`disable()` | L30：`control.enable()`、`control.disable()` |
@@ -244,7 +243,15 @@ Manager 成员存在不代表当前固件支持其所有操作。统一接口检
 O30 已移除运动时间和扭矩上限的统一接口、型号 Manager 接口及相关样本、事件和快照字段。
 旧调用须移除并重新编译；实际扭矩读取和电流上限读写继续提供。
 统一接口已移除 `set_torques()`、`set_limit_compensations()` 和 `get_limit_compensations()`；
-原有 L6 调用迁移到下表的型号 Manager。扭矩读取和三项增益读写继续通过统一接口提供。
+原有 L6 调用迁移到下表的型号 Manager；统一接口继续提供扭矩读取。
+L6 的位置 Kp、位置 Kd、扭矩 Kd 已完整移出统一接口，包括读写方法、能力表、样本类型、
+关节状态、快照字段和统一事件。调用方须改用 `l6::L6` 的专有 Manager 并重新编译。
+
+| 原 `HandDevice` 入口 | 专有 Manager 写入 | 专有 Manager 读取 |
+| --- | --- | --- |
+| `set_position_kp()` / `get_position_kp()` | `position_kp.set_values()` | `position_kp.get_blocking()` / `get_snapshot()` |
+| `set_position_kd()` / `get_position_kd()` | `position_kd.set_values()` | `position_kd.get_blocking()` / `get_snapshot()` |
+| `set_torque_kd()` / `get_torque_kd()` | `torque_kd.set_values()` | `torque_kd.get_blocking()` / `get_snapshot()` |
 
 ### 通过 Manager 使用专有功能
 
@@ -252,6 +259,7 @@ O30 已移除运动时间和扭矩上限的统一接口、型号 Manager 接口�
 
 | 功能 | 型号与入口 | 使用要点 |
 | --- | --- | --- |
+| L6 位置与扭矩增益 | `position_kp`、`position_kd`、`torque_kd` 的 `set_values()`、`get_blocking()`、`get_snapshot()` | 六关节 `std::array<uint8_t, 6>`；Kp 写入 `0..200`，两项 Kd 写入 `0..255` |
 | L6 扭矩目标设置 | `torque.set_torques()` | 原始 `0..255`；`0` 选择位置模式，`1..255` 为扭矩模式输出 |
 | L6 限位补偿 | `limit_compensation.set_values()`、`get_blocking()`、`get_snapshot()` | 原始 `0..255`；物理比例与方向未确认，仅型号接口提供 |
 | CAN 地址配置 | L6：`config.set_id()`、`set_transmit_id()`、`set_receive_id()`；O6／L20 Lite：`set_id()`、`set_device_id()`、`set_transmit_id()` | 修改后按设备实际地址重新连接 |
@@ -302,8 +310,10 @@ int main() try {
 }
 ```
 
-此 Manager 的 `set_values()` 同步等待写回复；统一接口的 `set_position_kp()` 则返回异步句柄。
-两者的完成判断方式不同，协议回复仍不等于机械效果已验证。
+这三个 Manager 的 `set_values()` 同步等待完整写回复，不返回 `CommandHandle`。
+写回复可能包含修改前的值；`get_snapshot()` 保留实际回复，显式读回使用 `get_blocking()`。
+`position_kd`、`torque_kd` 的用法相同；这些参数不进入统一快照或统一事件流。
+协议回复仍不等于机械效果已验证。
 
 ### 当前限制
 

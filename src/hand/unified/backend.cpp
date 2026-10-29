@@ -33,10 +33,6 @@ namespace linkerbot::hand::unified_detail {
                 return CommandFamily::kAccelerationSetting;
             case CommandSemantic::kCurrentLimits:
                 return CommandFamily::kCurrentLimit;
-            case CommandSemantic::kPositionKp:
-            case CommandSemantic::kPositionKd:
-            case CommandSemantic::kTorqueKd:
-                return CommandFamily::kControlGain;
             case CommandSemantic::kStallDetectionTimes:
             case CommandSemantic::kStallThresholds:
             case CommandSemantic::kStallHoldCurrents:
@@ -246,9 +242,6 @@ namespace linkerbot::hand::unified_detail {
                 update(current.angles, TelemetrySemantic::kAngles, "angles");
                 // These configuration channels also declare freshness bounds.
                 update(current.configured_speeds, TelemetrySemantic::kConfiguredSpeeds, "speeds");
-                update(current.position_kp, TelemetrySemantic::kPositionKp, "position_kp");
-                update(current.position_kd, TelemetrySemantic::kPositionKd, "position_kd");
-                update(current.torque_kd, TelemetrySemantic::kTorqueKd, "torque_kd");
                 return health;
             }
 

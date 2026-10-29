@@ -16,7 +16,7 @@ namespace linkerbot::hand {
         kSpeedSetting,
         kAccelerationSetting,
         kCurrentLimit,
-        kControlGain,
+        // Value 4 belonged to the removed unified control-gain family.
         // Values 5..7 belonged to removed torque-limit, torque-target and motion-time families.
         kStallConfiguration = 8,
         kDiscreteOperation = 10

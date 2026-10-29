@@ -18,13 +18,13 @@ namespace linkerbot::hand::hardware_test {
         VectorReader read;
     };
 
-    inline const std::array<VectorApi, 14> vector_apis{{
+    inline const std::array<VectorApi, 11> vector_apis{{
 #define HW_GET(Name, Semantic) {#Name, TelemetrySemantic::Semantic, read_vector<&HandDevice::Name>}
         HW_GET(get_speeds, kMeasuredSpeeds), HW_GET(get_configured_speeds, kConfiguredSpeeds),
         HW_GET(get_configured_accelerations, kConfiguredAccelerations), HW_GET(get_currents, kCurrents),
-        HW_GET(get_current_limits, kCurrentLimits), HW_GET(get_torques, kTorques), HW_GET(get_position_kp, kPositionKp),
-        HW_GET(get_position_kd, kPositionKd), HW_GET(get_torque_kd, kTorqueKd), HW_GET(get_temperatures, kTemperatures),
-        HW_GET(get_voltages, kVoltages), HW_GET(get_stall_detection_times, kStallDetectionTimes),
+        HW_GET(get_current_limits, kCurrentLimits), HW_GET(get_torques, kTorques),
+        HW_GET(get_temperatures, kTemperatures), HW_GET(get_voltages, kVoltages),
+        HW_GET(get_stall_detection_times, kStallDetectionTimes),
         HW_GET(get_stall_thresholds, kStallThresholds), HW_GET(get_stall_hold_currents, kStallHoldCurrents)
 #undef HW_GET
     }};
@@ -41,15 +41,12 @@ namespace linkerbot::hand::hardware_test {
 #define HW_PARAM(Set, Get, Command, Telemetry, Env)                                                                    \
     {#Set, Env, CommandSemantic::Command, &HandDevice::Set, TelemetrySemantic::Telemetry, read_vector<&HandDevice::Get>}
 
-    inline const std::array<ParameterApi, 9> parameter_apis{
+    inline const std::array<ParameterApi, 6> parameter_apis{
         {HW_PARAM(set_speeds, get_configured_speeds, kSpeeds, kConfiguredSpeeds, "HAND_DEVICE_BASELINE_SPEEDS"),
          HW_PARAM(set_accelerations, get_configured_accelerations, kAccelerations, kConfiguredAccelerations,
                   "HAND_DEVICE_BASELINE_ACCELERATIONS"),
          HW_PARAM(set_current_limits, get_current_limits, kCurrentLimits, kCurrentLimits,
                   "HAND_DEVICE_BASELINE_CURRENT_LIMITS"),
-         HW_PARAM(set_position_kp, get_position_kp, kPositionKp, kPositionKp, "HAND_DEVICE_BASELINE_POSITION_KP"),
-         HW_PARAM(set_position_kd, get_position_kd, kPositionKd, kPositionKd, "HAND_DEVICE_BASELINE_POSITION_KD"),
-         HW_PARAM(set_torque_kd, get_torque_kd, kTorqueKd, kTorqueKd, "HAND_DEVICE_BASELINE_TORQUE_KD"),
          HW_PARAM(set_stall_detection_times, get_stall_detection_times, kStallDetectionTimes, kStallDetectionTimes,
                   "HAND_DEVICE_BASELINE_STALL_TIMES"),
          HW_PARAM(set_stall_thresholds, get_stall_thresholds, kStallThresholds, kStallThresholds,

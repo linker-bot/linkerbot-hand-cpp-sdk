@@ -23,9 +23,6 @@ namespace linkerbot::hand {
         std::optional<double> configured_acceleration_raw;
         std::optional<double> current_raw;
         std::optional<double> current_limit_raw;
-        std::optional<double> position_kp_raw;
-        std::optional<double> position_kd_raw;
-        std::optional<double> torque_kd_raw;
         std::optional<double> torque_raw;
         std::optional<double> temperature_raw;
         std::optional<double> voltage_raw;
@@ -49,9 +46,6 @@ namespace linkerbot::hand {
         std::optional<ConfiguredAccelerationSample> configured_accelerations;
         std::optional<CurrentSample> currents;
         std::optional<CurrentLimitSample> current_limits;
-        std::optional<PositionKpSample> position_kp;
-        std::optional<PositionKdSample> position_kd;
-        std::optional<TorqueKdSample> torque_kd;
         std::optional<TorqueSample> torques;
         std::optional<TemperatureSample> temperatures;
         std::optional<ForceSample> force;

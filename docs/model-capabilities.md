@@ -33,14 +33,13 @@
 | 速度设置 | 支持 | 支持 | 支持 | 支持 | 支持 | 支持 |
 | 加速度设置 | — | 支持 | 支持 | — | — | 支持 |
 | 电流上限设置 | 支持 | 支持 | 支持 | 支持 | 支持 | 支持 |
-| 位置 Kp / 位置 Kd / 扭矩 Kd | 支持 | — | — | — | — | — |
 | 堵转时间 / 阈值 / 保持电流设置 | 支持 | 支持 | 支持 | — | — | 支持 |
 | 清故障 | 支持 | — | — | 支持 | — | — |
 | 使能 / 失能 | — | — | — | — | 支持 | — |
 | 保存参数 | 支持 | 支持 | — | — | — | — |
 
 L20 Lite 的保存配置、O30 的 Flash 保存等入口由型号 Manager 提供，见各型号的专有功能。
-O30 的 `pid` Manager 与 L6 的统一增益接口是不同入口，不能直接互换。
+L6 的三项增益仅通过专有 Manager 读写；O30 的 `pid` Manager 是另一套型号专有入口，不能直接互换。
 
 ### 状态与配置读取
 
@@ -63,7 +62,6 @@ SDK 目标缓存，便于区分实际反馈与设定值。
 | 电压 | — | — | — | — | — | 查询 |
 | 故障 | 查询 | 查询 | 查询 | 查询 | 查询 / 上报 | 查询 |
 | 五指触觉 | 固定矩阵 | 固定矩阵 | 固定矩阵及固件相关标量 | 固定矩阵 | 固定矩阵 | 按传感器描述解码 |
-| 位置 Kp / 位置 Kd / 扭矩 Kd | 查询 | — | — | — | — | — |
 | 堵转时间 / 阈值 / 保持电流 | 查询 | 查询 | 写回复缓存 | — | — | 查询 |
 
 所有型号均提供主机轮询、快照、事件流和恢复接口，但只适用于各自支持的通道。
@@ -85,9 +83,6 @@ SDK 目标缓存，便于区分实际反馈与设定值。
 | 实时电流 | `get_currents()` | — | `0..255`；协议换算为 `1400/255 mA` 每计数，绝对值 |
 | 电流上限 | `get_current_limits()`，查询 | `set_current_limits()` | `0..255`；协议换算同上 |
 | 扭矩输出 / 模式 | `get_torques()` | — | `0..255`；`0` 选择位置模式，`1..255` 为扭矩模式输出，物理扭矩未确认 |
-| 位置 Kp | `get_position_kp()` | `set_position_kp()` | `0..200`；协议说明为实际 Kp = raw × 10，增益解释仍有冲突记录 |
-| 位置 Kd | `get_position_kd()` | `set_position_kd()` | `0..255`；建议值不等于 SDK 硬限制 |
-| 扭矩 Kd | `get_torque_kd()` | `set_torque_kd()` | `0..255`，物理比例未确认 |
 | 堵转时间 | `get_stall_detection_times()` | `set_stall_detection_times()` | 写入 `1..255`，每计数 10 ms；读取保留设备原始值 |
 | 堵转阈值 / 保持电流 | `get_stall_thresholds()` / `get_stall_hold_currents()` | 对应 `set_stall_*()` | `0..255`；保持电流沿用协议“堵转力矩”字段，物理比例未确认 |
 | 温度 / 故障 | `get_temperatures()` / `get_faults()` | `clear_faults()` | 温度为 `1°C` 每计数；故障为逐关节位掩码 |
@@ -96,7 +91,17 @@ SDK 目标缓存，便于区分实际反馈与设定值。
 
 型号接口通过 `angle`、`speed`、`current`、`current_limit`、`torque`、`temperature`、
 `fault`、`force_sensor`、`stall`、`version`、`config` 等 Manager 提供对应操作；
-`position_kp`、`position_kd`、`torque_kd` 使用 `set_values()` / `get_blocking()`。
+三项增益仅通过 `position_kp`、`position_kd`、`torque_kd` Manager 的
+`set_values()` / `get_blocking()` / `get_snapshot()` 读写，不进入 `HandDevice` 能力表、快照或事件流。
+
+| 专有 Manager | 写入原始范围 | 语义 |
+| --- | --- | --- |
+| `position_kp` | `0..200` | 协议说明为实际 Kp = raw × 10，增益解释仍有冲突记录 |
+| `position_kd` | `0..255` | 建议值不等于 SDK 硬限制 |
+| `torque_kd` | `0..255` | 物理比例未确认 |
+
+写入均使用六关节 `std::array<uint8_t, 6>`，读取保留设备返回的原始值，包括超出文档写入范围的值。
+统一接口的旧增益读写方法、样本与字段已移除；迁移方式见[使用指南](usage.md#通过-manager-使用专有功能)。
 扭矩目标设置仅通过 `torque.set_torques()` 提供；限位补偿读写仅通过
 `limit_compensation.set_values()` / `get_blocking()` 提供，不进入统一快照或事件流。
 

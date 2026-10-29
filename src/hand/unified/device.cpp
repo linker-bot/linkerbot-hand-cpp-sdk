@@ -867,9 +867,6 @@ namespace linkerbot::hand {
     LINKERBOT_HAND_DEFINE_SETTER(set_speeds, kSpeeds)
     LINKERBOT_HAND_DEFINE_SETTER(set_accelerations, kAccelerations)
     LINKERBOT_HAND_DEFINE_SETTER(set_current_limits, kCurrentLimits)
-    LINKERBOT_HAND_DEFINE_SETTER(set_position_kp, kPositionKp)
-    LINKERBOT_HAND_DEFINE_SETTER(set_position_kd, kPositionKd)
-    LINKERBOT_HAND_DEFINE_SETTER(set_torque_kd, kTorqueKd)
     LINKERBOT_HAND_DEFINE_SETTER(set_stall_detection_times, kStallDetectionTimes)
     LINKERBOT_HAND_DEFINE_SETTER(set_stall_thresholds, kStallThresholds)
     LINKERBOT_HAND_DEFINE_SETTER(set_stall_hold_currents, kStallHoldCurrents)
@@ -901,9 +898,6 @@ namespace linkerbot::hand {
     LINKERBOT_HAND_DEFINE_GETTER(get_currents, kCurrents, CurrentSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_current_limits, kCurrentLimits, CurrentLimitSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_torques, kTorques, TorqueSample)
-    LINKERBOT_HAND_DEFINE_GETTER(get_position_kp, kPositionKp, PositionKpSample)
-    LINKERBOT_HAND_DEFINE_GETTER(get_position_kd, kPositionKd, PositionKdSample)
-    LINKERBOT_HAND_DEFINE_GETTER(get_torque_kd, kTorqueKd, TorqueKdSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_temperatures, kTemperatures, TemperatureSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_faults, kFaults, FaultSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_voltages, kVoltages, VoltageSample)
@@ -1017,9 +1011,6 @@ namespace linkerbot::hand {
         observe_sample(result.configured_accelerations);
         observe_sample(result.currents);
         observe_sample(result.current_limits);
-        observe_sample(result.position_kp);
-        observe_sample(result.position_kd);
-        observe_sample(result.torque_kd);
         observe_sample(result.torques);
         observe_sample(result.temperatures);
         observe_sample(result.force);
@@ -1056,9 +1047,6 @@ namespace linkerbot::hand {
         complete_meta(result.configured_accelerations, TelemetrySemantic::kConfiguredAccelerations);
         complete_meta(result.currents, TelemetrySemantic::kCurrents);
         complete_meta(result.current_limits, TelemetrySemantic::kCurrentLimits);
-        complete_meta(result.position_kp, TelemetrySemantic::kPositionKp);
-        complete_meta(result.position_kd, TelemetrySemantic::kPositionKd);
-        complete_meta(result.torque_kd, TelemetrySemantic::kTorqueKd);
         complete_meta(result.torques, TelemetrySemantic::kTorques);
         complete_meta(result.temperatures, TelemetrySemantic::kTemperatures);
         complete_meta(result.force, TelemetrySemantic::kForce);
