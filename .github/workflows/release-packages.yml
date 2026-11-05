@@ -37,7 +37,7 @@ env:
 
 jobs:
   targets:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     outputs:
       linux: ${{ steps.matrix.outputs.linux }}
       windows: ${{ steps.matrix.outputs.windows }}
@@ -67,9 +67,14 @@ jobs:
           sys.path.insert(0, 'validation')
           from release_matrix import load_targets
           targets = load_targets('ci/package-targets.json')
+          # Keep native ARM64 builds on hosted runners; both repository runners are x64.
+          for row in targets['linux']:
+              if row['arch'] == 'x86_64':
+                  row['runner'] = ['self-hosted', 'Linux', 'X64']
           for row in targets['windows']:
               arm = row['arch'] == 'ARM64'
-              row.update(runner='windows-11-vs2026-arm' if arm else 'windows-2022',
+              row.update(runner='windows-11-vs2026-arm' if arm else
+                         ['self-hosted', 'Windows', 'X64', 'linkerbot-win-x64'],
                          generator='Visual Studio 18 2026' if arm else 'Visual Studio 17 2022',
                          cmake='4.2.3' if arm else '3.31.8',
                          cmake_arch='arm64' if arm else 'x86_64')
@@ -116,9 +121,12 @@ jobs:
           EXPECTED_DISTRIBUTION: ${{ matrix.distribution }}
         run: |
           docker run --rm -v "$GITHUB_WORKSPACE:/src" -v "$RUNNER_TEMP/release:/release" -w /src \
+            -e RUNNER_UID="$(id -u)" -e RUNNER_GID="$(id -g)" \
             -e HAND_SHA -e COMM_SHA -e RELEASE_VERSION -e EXPECTED_ARCH -e EXPECTED_DISTRIBUTION \
             -e BUILD_IMAGE="$(cat "$RUNNER_TEMP/build-image.txt")" \
             "$(cat "$RUNNER_TEMP/build-image.txt")" bash -euc '
+              # Restore bind-mounted file ownership for the next self-hosted job.
+              trap "chown -R \"$RUNNER_UID:$RUNNER_GID\" /src/hand-cpp /src/linkerbot-transport-cpp /release" EXIT
               export DEBIAN_FRONTEND=noninteractive
               apt-get update
               apt-get install -y --no-install-recommends build-essential git ca-certificates python3 python3-venv ninja-build
@@ -213,7 +221,7 @@ jobs:
   collect:
     name: Verify complete twelve-package release set
     needs: [targets, linux, windows]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -244,7 +252,7 @@ jobs:
     name: Optionally create a verified draft Release
     if: github.event_name == 'workflow_dispatch' && inputs.create_draft
     needs: [targets, collect]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
       actions: read

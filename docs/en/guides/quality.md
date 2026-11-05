@@ -6,7 +6,8 @@
 
 The `C++ Report Card` workflow runs on PRs, main/master pushes and manual dispatch.
 It uses the same full transport SHA as the main CI workflow, pinned versions of the
-Report Card action and GitHub actions, and Clang 18/Cppcheck on Ubuntu 24.04 ARM64.
+Report Card action and GitHub actions, and Clang 18/Cppcheck on the repository's
+self-hosted Linux x64 runner (`linkerhand-linux`, with an Ubuntu 24.04 toolchain).
 The compilation database is produced and consumed on the same runner.
 
 Full mode runs clang-format, Cppcheck and clang-tidy (`clang-analyzer-*`, `bugprone-*`).
@@ -25,7 +26,7 @@ No new exclusions, suppressions or disabled rules are introduced by this gate.
 The numeric score does not measure test coverage or hardware compatibility.
 
 Every run uploads `report.json`, `report.md`, `badge.svg` and the merged compilation
-database as `cppreportcard-ubuntu-24.04-arm`. Reports are not automatically committed.
+database as `cppreportcard-linux-x64`. Reports are not automatically committed.
 The [report index](https://github.com/linker-bot/linkerbot-hand-cpp-sdk/blob/main/.github/cppreportcard/README.md) links to the workflow.
 
 ## Reproduce

@@ -1,0 +1,5 @@
+# Repository runner label and hosted ARM64 image absent from actionlint's list.
+self-hosted-runner:
+  labels:
+    - linkerbot-win-x64
+    - windows-11-vs2026-arm

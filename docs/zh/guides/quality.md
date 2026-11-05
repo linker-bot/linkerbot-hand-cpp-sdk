@@ -6,7 +6,8 @@
 
 `C++ Report Card` 工作流在 PR、main/master 推送和手动触发时运行。
 它从主 CI 读取同一个完整 transport 提交号，固定 Report Card 与 GitHub Action 版本，
-在 Ubuntu 24.04 ARM64 上使用 Clang 18 和 Cppcheck。同一运行器生成和消费编译数据库。
+在仓库的自托管 Linux x64 runner（`linkerhand-linux`，使用 Ubuntu 24.04 工具链）上
+运行 Clang 18 和 Cppcheck。同一运行器生成和消费编译数据库。
 
 full 模式运行 clang-format、Cppcheck、clang-tidy（`clang-analyzer-*`、`bugprone-*`）。
 范围包括 SDK 源码和头文件、示例、工具、离线及硬件测试编译单元、安装包消费者。
@@ -19,7 +20,7 @@ CI 要求三个工具均完整分析、**A+、100/100 且零诊断**。
 Action 使用 `fail_on: findings` 与 `threshold: 100`，另用独立校验器核对等级和完整性。
 此次门禁不新增排除项、抑制标记或关闭规则。分数不代表测试覆盖率或硬件兼容性。
 
-每次上传 `cppreportcard-ubuntu-24.04-arm` 附件，包含 `report.json`、`report.md`、
+每次上传 `cppreportcard-linux-x64` 附件，包含 `report.json`、`report.md`、
 `badge.svg` 和合并编译数据库。报告不自动提交到仓库。
 [报告索引](https://github.com/linker-bot/linkerbot-hand-cpp-sdk/blob/main/.github/cppreportcard/README.md)链接到工作流。
 

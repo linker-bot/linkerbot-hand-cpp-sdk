@@ -21,7 +21,8 @@ env:
 jobs:
   build-and-test:
     name: GCC 13 / ${{ matrix.build_type }}
-    runs-on: ubuntu-24.04
+    # linkerhand-linux; runner names are not scheduling labels.
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 30
     env:
       CC: gcc-13
@@ -141,7 +142,8 @@ jobs:
 
   windows-discovery:
     name: Windows x64 / ${{ matrix.configuration }}
-    runs-on: windows-2022
+    # linkerhand_win
+    runs-on: [self-hosted, Windows, X64, linkerbot-win-x64]
     timeout-minutes: 50
     strategy:
       fail-fast: false
@@ -200,7 +202,7 @@ jobs:
 
   sanitizers:
     name: ASan and UBSan
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 30
     env:
       CC: gcc-13
