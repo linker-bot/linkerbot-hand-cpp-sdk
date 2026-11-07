@@ -435,11 +435,13 @@ TEST_CASE("Python close cannot start an abandoned read after the claimed command
     raw->arm_tx_gate();
     auto claimed = hand.set_angles(std::vector<int32_t>(6, 10));
     const bool entered = raw->wait_until_tx_entered(1s);
-    bool timed_out = false;
+    auto read_error = ErrorCode::kInternal;
     try {
         (void)hand.get_angles(10ms);
-    } catch (const TimeoutError &) {
-        timed_out = true;
+    } catch (const HandError &error) {
+        read_error = error.code();
+    } catch (...) {
+        read_error = ErrorCode::kInternal;
     }
     auto closed = std::async(std::launch::async, [&] { hand.close(); });
     const auto limit = std::chrono::steady_clock::now() + 1s;
@@ -449,10 +451,10 @@ TEST_CASE("Python close cannot start an abandoned read after the claimed command
     std::this_thread::sleep_for(20ms);
     raw->release_tx_gate();
     closed.get();
-    validation::complete(claimed);
     const auto sent = raw->sent();
     REQUIRE((entered));
-    REQUIRE((timed_out));
+    REQUIRE((read_error == ErrorCode::kTimeout));
+    validation::complete(claimed);
     REQUIRE((sent.size() == 1));
     REQUIRE((sent.front().dlc == 7));
     session->close();

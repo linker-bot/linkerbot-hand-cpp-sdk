@@ -109,7 +109,7 @@ namespace linkerbot::hand::unified_detail {
                     }
                 }
             }
-            if (!completed) {
+            if (!completed || entry->completed_at >= deadline) {
                 throw TimeoutError("active read did not complete before its deadline");
             }
             if (entry->error) {
@@ -131,6 +131,7 @@ namespace linkerbot::hand::unified_detail {
             for (auto &[key, entry] : entries_) {
                 (void)key;
                 entry->error = error;
+                entry->completed_at = Clock::now();
                 entry->done = true;
             }
             entries_.clear();
@@ -191,6 +192,7 @@ namespace linkerbot::hand::unified_detail {
             uint64_t generation = 0;
             std::optional<Value> value;
             std::exception_ptr error;
+            Clock::time_point completed_at{};
             bool done = false;
             bool claimed = false;
             size_t waiters = 0;
@@ -208,7 +210,9 @@ namespace linkerbot::hand::unified_detail {
                 if (stopping_) {
                     break;
                 }
-                auto [key, entry] = std::move(queue_.front());
+                auto queued = std::move(queue_.front());
+                const auto key = queued.first;
+                auto entry = std::move(queued.second);
                 queue_.pop_front();
                 active_ = true;
                 lock.unlock();
@@ -245,6 +249,7 @@ namespace linkerbot::hand::unified_detail {
                     } catch (...) {
                         entry->error = std::current_exception();
                     }
+                    entry->completed_at = Clock::now();
                     entry->done = true;
                 }
                 if (const auto it = entries_.find(key); it != entries_.end() && it->second == entry) {
