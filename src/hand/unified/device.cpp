@@ -166,6 +166,8 @@ namespace linkerbot::hand {
             } catch (...) {
                 // A concurrent transition or allocation failure must not prevent
                 // admission shutdown. Existing evidence is still invalidated.
+                const std::lock_guard<std::mutex> lock(mutex_);
+                invalidate_cache_locked();
             }
         }
 
@@ -900,7 +902,10 @@ namespace linkerbot::hand {
             const std::lock_guard<std::mutex> lock(impl_->mutex_);
             impl_->check_context(context, "refresh_device_info");
             unified_detail::validate_connection_identity(
-                identity, impl_->config_, impl_->expected_identity_ ? &*impl_->expected_identity_ : nullptr,
+                identity, impl_->config_,
+                impl_->expected_identity_
+                    ? &::linkerbot::hand::detail::checked_value(impl_->expected_identity_, "missing expected identity")
+                    : nullptr,
                 "refresh_device_info");
             // Identity refresh leaves this generation's capability observations
             // and polling decisions intact, matching the Python read path.
@@ -935,9 +940,13 @@ namespace linkerbot::hand {
             }
             if (faulted) {
                 context.backend->cancel_commands();
+                const auto primary = std::current_exception();
                 try {
                     context.backend->stop_polling();
-                } catch (...) { /* Preserve the identity/transport error. */
+                } catch (...) {
+                    impl_->snapshot_cv_.notify_all();
+                    impl_->stream_cv_.notify_all();
+                    std::rethrow_exception(primary);
                 }
                 impl_->snapshot_cv_.notify_all();
                 impl_->stream_cv_.notify_all();
@@ -1262,19 +1271,23 @@ namespace linkerbot::hand {
     }
 
     HandSnapshot HandDevice::get_cached_snapshot() const {
+        const auto retained = [this] {
+            const std::lock_guard<std::mutex> lock(impl_->mutex_);
+            if (impl_->state_.load(std::memory_order_acquire) != Impl::State::kReady) {
+                impl_->invalidate_cache_locked();
+            }
+            return impl_->cached_snapshot_;
+        };
         try {
             // This only projects native caches, never a device transaction.
             if (impl_->open_.load(std::memory_order_acquire)) {
                 (void)impl_->snapshot();
             }
         } catch (const DeviceNotReadyError &) {
-            // The lifecycle transition owns invalidation under the same mutex.
+            // A concurrent transition owns invalidation under the same mutex.
+            return retained();
         }
-        const std::lock_guard<std::mutex> lock(impl_->mutex_);
-        if (impl_->state_.load(std::memory_order_acquire) != Impl::State::kReady) {
-            impl_->invalidate_cache_locked();
-        }
-        return impl_->cached_snapshot_;
+        return retained();
     }
 
     HandSnapshot HandDevice::wait_for_snapshot(const HandSnapshot &previous, std::chrono::milliseconds timeout) const {

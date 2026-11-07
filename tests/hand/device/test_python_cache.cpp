@@ -2,10 +2,25 @@
 #include "../../../src/hand/unified/detail/freshness.hpp"
 #include "../../../validation/fake_classic_hand.hpp"
 #include "hand/support/optional_value.hpp"
+#include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <future>
+#include <linkerbot/can/fake_transport.hpp>
+#include <linkerbot/can/message.hpp>
+#include <linkerbot/hand/api/config.hpp>
+#include <linkerbot/hand/api/device.hpp>
+#include <linkerbot/hand/capabilities.hpp>
+#include <linkerbot/hand/errors.hpp>
+#include <linkerbot/hand/health.hpp>
+#include <memory>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 using namespace linkerbot::hand;
 using namespace std::chrono_literals;
@@ -19,7 +34,7 @@ TEST_CASE("cached snapshots are shaped and zero-I/O before open for all supporte
             config.o30_layout = O30Layout::kPythonV25;
         }
         int factories = 0;
-        HandDevice device(config, [&] {
+        const HandDevice device(config, [&] {
             ++factories;
             return std::make_unique<linkerbot::can::FakeTransport>();
         });
@@ -188,7 +203,8 @@ TEST_CASE("V25 freshness uses Python torque-limit and motion-time boundaries", "
 TEST_CASE("readable cache is invalid during recovery and commits only a successful generation",
           "[comm][python-phase1]") {
     std::atomic<int> factories{0};
-    std::promise<void> entered, release;
+    std::promise<void> entered;
+    std::promise<void> release;
     auto entered_future = entered.get_future();
     auto gate = release.get_future().share();
     HandDevice device(validation::config(), [&] {
@@ -229,7 +245,8 @@ TEST_CASE("readable cache is invalid during recovery and commits only a successf
 TEST_CASE("concurrent close fences a non-destructive identity refresh", "[comm][python-phase1]") {
     validation::FakeHand device;
     const auto before = device.hand.get_cached_snapshot();
-    std::promise<void> entered, release;
+    std::promise<void> entered;
+    std::promise<void> release;
     auto entered_future = entered.get_future();
     auto gate = release.get_future().share();
     device.transport->on_request(0x28, [&](const auto &request) {
@@ -273,4 +290,24 @@ TEST_CASE("failed open never publishes a partial baseline into the readable cach
     REQUIRE_FALSE(test_support::require_value(cached.angles).meta.valid);
     REQUIRE_FALSE(cached.device_info);
     REQUIRE_FALSE(cached.joints.front().angle_raw);
+}
+
+TEST_CASE("readable cache neither waits for a claimed write nor adds device I/O", "[comm][python-phase1]") {
+    validation::FakeHand device;
+    const auto baseline = device.hand.get_cached_snapshot();
+    const auto command = device.block();
+    const auto sent = device.transport->sent().size();
+    auto reading = std::async(std::launch::async, [&] {
+        const auto cache = device.hand.get_cached_snapshot();
+        return std::make_pair(cache, device.transport->sent().size());
+    });
+    const auto available = reading.wait_for(500ms);
+    device.transport->release_tx_gate();
+    const auto observed = reading.get();
+    validation::complete(command);
+    REQUIRE((available == std::future_status::ready));
+    REQUIRE((observed.second == sent));
+    REQUIRE(
+        (test_support::require_value(observed.first.angles).raw == test_support::require_value(baseline.angles).raw));
+    REQUIRE((test_support::require_value(observed.first.angles).meta.valid));
 }
