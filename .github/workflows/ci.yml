@@ -256,3 +256,44 @@ jobs:
       - name: Run sanitizer tests
         working-directory: hand-cpp
         run: ctest --test-dir build-sanitized --output-on-failure --timeout 180
+
+  diagnose-arm64:
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    runs-on: windows-11-arm
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: hand-cpp
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ env.COMM_REPOSITORY }}
+          ref: ${{ env.COMM_REF }}
+          path: linkerbot-transport-cpp
+          token: ${{ secrets.LINKERBOT_COMM_TOKEN || github.token }}
+      - run: ./hand-cpp/validation/setup_windows.ps1 -Version '4.2.3' -Architecture 'arm64'
+      - name: Build optimized diagnostic executable
+        run: |
+          cmake -S hand-cpp -B build/diagnostic -G 'Visual Studio 17 2022' -A ARM64 -T 'v143,version=14.44' `
+            '-DLINKERBOT_COMM_SOURCE_DIR=${{ github.workspace }}/linkerbot-transport-cpp' `
+            -DLINKERBOT_BUILD_TESTS=ON -DLINKERBOT_COMM_BUILD_TESTS=OFF `
+            '-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /Zi /DLINKERBOT_DIAGNOSE_WINDOWS_FAULTS /DNOMINMAX' `
+            '-DCMAKE_EXE_LINKER_FLAGS_RELEASE=/DEBUG /MAP'
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic configuration failed' }
+          cmake --build build/diagnostic --config Release --target tests --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic build failed' }
+      - name: Reproduce native cached-read failure
+        run: |
+          & ./build/diagnostic/tests/Release/tests.exe 'HandDevice L20Lite stall reads use complete acknowledged write cache' --success 2>&1 | Tee-Object fault.log
+          "EXIT $LASTEXITCODE" | Tee-Object -Append fault.log
+          if ($LASTEXITCODE -ne 0) { throw 'Reproduced native cached-read failure' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: arm64-fault-diagnostic
+          path: |
+            fault.log
+            build/diagnostic/tests/Release/tests.map
