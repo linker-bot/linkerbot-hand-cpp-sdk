@@ -290,11 +290,14 @@ namespace linkerbot::hand::unified_detail {
         }
         fifo_.clear();
         latest_.clear();
-        if (active_ && !active_->handle.done() &&
-            !(python_behavior_ && active_->request.ack_expectation == AckExpectation::kNone &&
-              active_->request.delivery && active_->request.delivery->preserve_claimed())) {
-            fail(*active_, error);
-            --metrics_.at(active_->handle.family()).value.pending;
+        if (active_ && !active_->handle.done()) {
+            const bool preserved =
+                python_behavior_ && active_->request.delivery &&
+                active_->request.delivery->preserve_claimed(active_->request.ack_expectation == AckExpectation::kNone);
+            if (!preserved) {
+                fail(*active_, error);
+                --metrics_.at(active_->handle.family()).value.pending;
+            }
         }
         changed_.notify_all();
     }

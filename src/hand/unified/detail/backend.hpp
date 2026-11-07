@@ -39,6 +39,8 @@ namespace linkerbot::hand::unified_detail {
     class DeviceBackend {
     public:
         virtual ~DeviceBackend() = default;
+        virtual void stop_admission() {}
+        virtual void resume_admission() {}
 
         [[nodiscard]] virtual CommandHandle submit(const CommandRequest &request) = 0;
         [[nodiscard]] virtual TelemetrySample read(TelemetrySemantic semantic, std::chrono::milliseconds timeout) = 0;

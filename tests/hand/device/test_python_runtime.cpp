@@ -457,6 +457,11 @@ TEST_CASE("Python close cannot start an abandoned read after the claimed command
     validation::complete(claimed);
     REQUIRE((sent.size() == 1));
     REQUIRE((sent.front().dlc == 7));
+    hand.open();
+    const auto reopened = hand.set_angles(std::vector<int32_t>(6, 20));
+    validation::complete(reopened);
+    REQUIRE((reopened.stage() == CommandStage::kDispatched));
+    hand.close();
     session->close();
 }
 
@@ -568,4 +573,32 @@ TEST_CASE("native and Python policies preserve command errors during unwinding",
         REQUIRE((next.stage() == CommandStage::kDispatched));
         device.hand.close();
     }
+}
+
+TEST_CASE("recovery resumes an endpoint after draining its claimed dispatch", "[comm][python-phase2]") {
+    validation::FakeHand device(python_config());
+    auto *blocked = device.transport;
+    blocked->arm_tx_gate();
+    const auto command = device.hand.set_angles(std::vector<int32_t>(6, 10));
+    const bool claimed = blocked->wait_until_tx_entered(1s);
+    auto recovering = std::async(std::launch::async, [&] { device.hand.recover_for(2s); });
+    const auto deadline = std::chrono::steady_clock::now() + 1s;
+    while (device.hand.is_open() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    blocked->release_tx_gate();
+    recovering.get();
+    REQUIRE((claimed));
+    const auto receipts = command.send_results();
+    CAPTURE(command.stage(), command.sent_frames(), receipts.size());
+    if (!receipts.empty()) {
+        CAPTURE(receipts.front().outcome, receipts.front().sent_frames);
+    }
+    REQUIRE((command.stage() == CommandStage::kDispatched));
+    validation::complete(command);
+    const auto next = device.hand.set_angles(std::vector<int32_t>(6, 20));
+    validation::complete(next);
+    REQUIRE((next.stage() == CommandStage::kDispatched));
+    REQUIRE((device.hand.get_cached_snapshot().connection_generation == 2));
+    device.hand.close();
 }

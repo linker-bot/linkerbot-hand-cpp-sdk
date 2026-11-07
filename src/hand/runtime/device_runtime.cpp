@@ -503,7 +503,9 @@ namespace linkerbot::hand::runtime {
         if (!state_) {
             return;
         }
-        state_->abort.cancel();
+        if (!state_->scoped_response_policy || !state_->receipt) {
+            state_->abort.cancel();
+        }
         if (state_->cancel) {
             state_->cancel();
         }
@@ -549,6 +551,7 @@ namespace linkerbot::hand::runtime {
         std::thread rx;
         bool rx_stop = false;
         bool destruction_requested = false;
+        bool python_endpoint_policy = false;
         RuntimeHealth health;
         std::map<std::string, Sample> samples;
         std::map<std::string, ChannelState> channel_states;
@@ -593,6 +596,7 @@ namespace linkerbot::hand::runtime {
             std::function<void()> prepare_send;
             std::function<void()> accepted_send;
             unified_detail::RuntimeAccess::ReceiptAccepted receipt_accepted;
+            unified_detail::RuntimeAccess::AdmitSend admit_send;
         };
         std::map<std::thread::id, CommandExecution> command_executions;
         struct SendAudit {
@@ -755,6 +759,16 @@ namespace linkerbot::hand::runtime {
             return classified;
         }
 
+        bool stop_profile_endpoint_locked() {
+            try {
+                // This call gates admission and cancels only queued sends. The
+                // existing drain_sends() waits for claimed I/O outside mutex.
+                (void)session->stop_endpoint(identity, Clock::now());
+                return true;
+            } catch (const can::TimeoutError &) {
+                return false;
+            }
+        }
         void require_ready() const {
             if (health.state != DeviceState::ready || (inbox && inbox->health().closed)) {
                 ErrorContext context;
@@ -818,17 +832,25 @@ namespace linkerbot::hand::runtime {
             // Caller-side timeout/cancellation can beat the receive worker's next
             // reap. Account any already-completed physical receipt before freezing
             // the public command's terminal frame count.
+            std::optional<transport::SendResult> observed_send;
             if (state->receipt &&
                 ::linkerbot::hand::detail::checked_value(state->receipt, "missing runtime state: state->receipt")
                     .completed()) {
                 reap_sends_locked();
+                observed_send =
+                    ::linkerbot::hand::detail::checked_value(state->receipt, "missing harvested receipt").result();
             }
             if (error) {
                 error = record_error_locked(std::move(error), state->context, ErrorCode::kProtocol);
             }
             sync_command_receipt_locked(*state);
             if (isolate) {
-                state->abort.cancel();
+                if (!state->scoped_response_policy || !state->receipt) {
+                    state->abort.cancel();
+                } else if (!::linkerbot::hand::detail::checked_value(state->receipt, "missing accepted receipt")
+                                .completed()) {
+                    (void)stop_profile_endpoint_locked();
+                }
                 bool may_have_sent = state->receipt && ::linkerbot::hand::detail::checked_value(
                                                            state->receipt, "missing runtime state: state->receipt")
                                                            .result()
@@ -856,12 +878,15 @@ namespace linkerbot::hand::runtime {
                 if (state->done) {
                     return;
                 }
-                // The writer can finish between reap_locked's receipt checks.
-                // Publish the receipt before publishing successful completion,
-                // even if the earlier harvest observed the send as pending.
-                if (state->receipt &&
-                    ::linkerbot::hand::detail::checked_value(state->receipt, "missing runtime state: state->receipt")
-                        .completed()) {
+                // A profile success may only use a receipt whose observer has
+                // already run. If delivery finishes after the harvest above,
+                // retain the logical error so the facade drains/flushes it before
+                // publishing dispatch. Native default completion remains unchanged.
+                if (state->scoped_response_policy) {
+                    state->sent_result = observed_send;
+                } else if (state->receipt && ::linkerbot::hand::detail::checked_value(
+                                                 state->receipt, "missing runtime state: state->receipt")
+                                                 .completed()) {
                     state->sent_result = ::linkerbot::hand::detail::checked_value(
                                              state->receipt, "missing runtime state: state->receipt")
                                              .result();
@@ -1560,8 +1585,13 @@ namespace linkerbot::hand::runtime {
                 options.family = state->plan.command_family;
                 // Admission does not perform I/O. Install the receipt while still
                 // holding runtime state so cancel cannot lose claimed-send evidence.
-                state->receipt =
-                    p.session->submit({state->plan.frames, state->plan.gap, state->plan.initial_delay}, options);
+                const auto submit = [&] {
+                    return p.session->submit({state->plan.frames, state->plan.gap, state->plan.initial_delay}, options);
+                };
+                const auto execution = p.command_executions.find(state->owner);
+                state->receipt = execution != p.command_executions.end() && execution->second.admit_send
+                                     ? execution->second.admit_send(submit, final_send)
+                                     : submit();
                 p.send_audit.push_back(
                     {std::move(audit_domain),
                      ::linkerbot::hand::detail::checked_value(state->receipt, "missing runtime state: state->receipt"),
@@ -2477,11 +2507,18 @@ namespace linkerbot::hand::runtime {
     void DeviceRuntime::cancel_all() {
         auto &p = *impl_;
         std::lock_guard<std::mutex> lock(p.mutex);
+        if (p.python_endpoint_policy && p.health.state == DeviceState::closed) {
+            return;
+        }
         const auto pending = p.pending;
         for (const auto &state : pending) {
             p.finish_locked(state, std::make_exception_ptr(CancelledError("device requests cancelled")), true);
         }
-        p.session->cancel_endpoint(p.identity);
+        if (p.python_endpoint_policy) {
+            (void)p.stop_profile_endpoint_locked();
+        } else {
+            p.session->cancel_endpoint(p.identity);
+        }
         p.cv.notify_all();
     }
     bool DeviceRuntime::is_event_thread() const {
@@ -2646,6 +2683,9 @@ namespace linkerbot::hand::runtime {
                 }
                 p.poisoned.clear();
                 p.quarantine.clear();
+                if (p.python_endpoint_policy) {
+                    p.session->resume_endpoint(p.identity);
+                }
                 p.rx_stop = false;
                 p.health.state = DeviceState::ready;
             }
@@ -2672,7 +2712,8 @@ void linkerbot::hand::unified_detail::RuntimeAccess::set_polling_gate(runtime::D
 void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(
     runtime::DeviceRuntime &runtime, runtime::Deadline deadline, bool send_only, SendObserver observer,
     FinalSend final_send, runtime::CancellationToken cancellation, const std::function<void()> &execute,
-    std::function<void()> prepare_send, std::function<void()> accepted_send, ReceiptAccepted receipt_accepted) {
+    std::function<void()> prepare_send, std::function<void()> accepted_send, ReceiptAccepted receipt_accepted,
+    AdmitSend admit_send) {
     struct SendCallbacks {
         SendObserver &observer;
         FinalSend &final_send;
@@ -2689,11 +2730,11 @@ void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(
         if (const auto it = p.command_executions.find(owner); it != p.command_executions.end()) {
             previous = it->second;
         }
-        p.command_executions.insert_or_assign(owner,
-                                              runtime::DeviceRuntime::Impl::CommandExecution{
-                                                  send_only, deadline, cancellation, std::move(callbacks.observer),
-                                                  std::move(callbacks.final_send), std::move(callbacks.prepare_send),
-                                                  std::move(callbacks.accepted_send), std::move(receipt_accepted)});
+        p.command_executions.insert_or_assign(
+            owner, runtime::DeviceRuntime::Impl::CommandExecution{
+                       send_only, deadline, cancellation, std::move(callbacks.observer),
+                       std::move(callbacks.final_send), std::move(callbacks.prepare_send),
+                       std::move(callbacks.accepted_send), std::move(receipt_accepted), std::move(admit_send)});
     }
     const auto restore = [&] {
         const std::lock_guard<std::mutex> lock(p.mutex);
@@ -2718,6 +2759,10 @@ void linkerbot::hand::unified_detail::RuntimeAccess::with_response_windows(runti
                                                                            const std::function<void()> &execute,
                                                                            runtime::Deadline execution_deadline,
                                                                            std::function<bool()> generation_valid) {
+    {
+        const std::lock_guard<std::mutex> lock(runtime.impl_->mutex);
+        runtime.impl_->python_endpoint_policy = true;
+    }
     auto previous = runtime::response_policies.extract(&runtime);
     try {
         runtime::response_policies.emplace(
@@ -2788,4 +2833,35 @@ void linkerbot::hand::unified_detail::RuntimeAccess::drain_sends(runtime::Device
 
 bool linkerbot::hand::unified_detail::RuntimeAccess::uses_response_windows(const runtime::DeviceRuntime &runtime) {
     return runtime::response_policies.count(&runtime) != 0;
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::resume_endpoint(runtime::DeviceRuntime &runtime) {
+    const std::lock_guard<std::mutex> lock(runtime.impl_->mutex);
+    runtime.impl_->session->resume_endpoint(runtime.impl_->identity);
+    runtime.impl_->python_endpoint_policy = true;
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::stop_endpoint(runtime::DeviceRuntime &runtime) {
+    const std::lock_guard<std::mutex> lock(runtime.impl_->mutex);
+    (void)runtime.impl_->stop_profile_endpoint_locked();
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::retire_closed_profiles(
+    const std::shared_ptr<transport::Session> &session) {
+    const std::lock_guard<std::mutex> registry(runtime::runtimes_mutex);
+    for (auto it = runtime::runtimes.begin(); it != runtime::runtimes.end();) {
+        bool closed_profile = false;
+        if (it->first.first == session.get()) {
+            if (auto existing = it->second.lock()) {
+                const std::lock_guard<std::mutex> lock(existing->impl_->mutex);
+                closed_profile = existing->impl_->python_endpoint_policy &&
+                                 existing->impl_->health.state == runtime::DeviceState::closed;
+            }
+        }
+        if (closed_profile) {
+            it = runtime::runtimes.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }

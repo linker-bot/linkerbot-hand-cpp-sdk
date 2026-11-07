@@ -538,6 +538,9 @@ namespace linkerbot::hand {
         // invalidates a generation. Executing work is fenced by its I/O context.
         void invalidate_commands(const char *operation) {
             invalidate_cache_locked();
+            if (backend_) {
+                backend_->stop_admission();
+            }
             scheduler_->invalidate(std::make_exception_ptr(
                 ClosedError("pending command generation ended",
                             {operation, unified_detail::model_name(config_.model), {}, generation_})));
@@ -894,7 +897,14 @@ namespace linkerbot::hand {
         context.backend->cancel_commands();
         const std::unique_lock<std::shared_mutex> drain(impl_->io_mutex_);
         try {
-            auto identity = context.backend->verify_identity(impl_->config_.side, timeout);
+            auto identity_timeout = timeout;
+            if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython) {
+                const auto deadline = runtime::deadline_after(timeout);
+                context.backend->drain_sends(deadline);
+                context.backend->resume_admission();
+                identity_timeout = runtime::remaining(deadline);
+            }
+            auto identity = context.backend->verify_identity(impl_->config_.side, identity_timeout);
             unified_detail::validate_connection_identity(
                 identity, impl_->config_,
                 impl_->expected_identity_

@@ -1,3 +1,4 @@
+#include "../../src/hand/unified/detail/command_delivery.hpp"
 #include "../../src/hand/unified/detail/runtime_access.hpp"
 #include "hand/support/optional_value.hpp"
 #include "hand/support/throw_as.hpp"
@@ -1937,4 +1938,194 @@ TEST_CASE("buffered response failures keep matching frames out of report decoder
     REQUIRE((test_support::require_value(before) == 64));
     REQUIRE_THROWS_AS(request.wait(), linkerbot::hand::ProtocolError);
     REQUIRE((test_support::require_value(rig.runtime->snapshot_as<int>("angle")) == 64));
+}
+
+TEST_CASE("preserved claimed dispatch batches finish every frame during runtime close", "[comm][python-phase2]") {
+    for (const bool dispatch_only : {false, true}) {
+        Rig rig;
+        const auto delivery = std::make_shared<linkerbot::hand::unified_detail::CommandDelivery>();
+        auto transaction = plan();
+        transaction.consume = {};
+        transaction.frames = {transaction.frames.front(), transaction.frames.front(), transaction.frames.front()};
+        rig.fake->arm_tx_gate();
+        auto sending = std::async(std::launch::async, [&] {
+            try {
+                using Access = linkerbot::hand::unified_detail::RuntimeAccess;
+                Access::with_response_windows(
+                    *rig.runtime, [](auto plan) { return plan; },
+                    [&] {
+                        Access::execute_command(
+                            *rig.runtime, Clock::now() + 2s, dispatch_only, {}, [](const auto &) { return true; }, {},
+                            [&] { (void)rig.runtime->execute(transaction, Clock::now() + 2s); }, {}, {}, {},
+                            [delivery](const Access::Submission &submit, bool final) {
+                                return delivery->admit(submit, final);
+                            });
+                    });
+            } catch (const linkerbot::hand::HandError &) {
+                // The native wait ends on close; the retained physical receipt owns
+                // the dispatch-only command's final result at the facade boundary.
+                return true;
+            }
+            return false;
+        });
+        const bool claimed = rig.fake->wait_until_tx_entered(1s);
+        const bool preserved = delivery->preserve_claimed(dispatch_only);
+        auto closing = std::async(std::launch::async, [&] { rig.runtime->close(); });
+        const auto deadline = Clock::now() + 1s;
+        while (rig.runtime->runtime_health().in_flight != 0 && Clock::now() < deadline) {
+            std::this_thread::sleep_for(1ms);
+        }
+        const bool ended = rig.runtime->runtime_health().in_flight == 0;
+        rig.fake->release_tx_gate();
+        const bool native_wait_ended = sending.get();
+        closing.get();
+        REQUIRE((claimed));
+        REQUIRE((preserved == dispatch_only));
+        REQUIRE((ended));
+        REQUIRE((native_wait_ended));
+        REQUIRE((delivery->draining_claimed()));
+        // Required-ACK commands fail closed but their claimed physical batch drains.
+        const auto result = test_support::require_value(delivery->receipt).result();
+        REQUIRE((result.outcome == linkerbot::transport::SendOutcome::dispatched));
+        REQUIRE((result.sent_frames == 3));
+        REQUIRE((rig.fake->sent().size() == 3));
+    }
+}
+
+TEST_CASE("Python read batches also finish every claimed frame during close", "[comm][python-phase2]") {
+    Rig rig;
+    auto transaction = plan();
+    transaction.frames = {transaction.frames.front(), transaction.frames.front(), transaction.frames.front()};
+    rig.fake->arm_tx_gate();
+    auto reading = std::async(std::launch::async, [&] {
+        try {
+            linkerbot::hand::unified_detail::RuntimeAccess::with_response_windows(
+                *rig.runtime, [](auto plan) { return plan; },
+                [&] { (void)rig.runtime->execute(transaction, Clock::now() + 2s); });
+        } catch (const linkerbot::hand::HandError &) {
+            return true;
+        }
+        return false;
+    });
+    const bool claimed = rig.fake->wait_until_tx_entered(1s);
+    auto closing = std::async(std::launch::async, [&] { rig.runtime->close(); });
+    const auto deadline = Clock::now() + 1s;
+    while (rig.runtime->runtime_health().in_flight != 0 && Clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    const bool ended = rig.runtime->runtime_health().in_flight == 0;
+    rig.fake->release_tx_gate();
+    const bool waiter_closed = reading.get();
+    closing.get();
+    REQUIRE((claimed));
+    REQUIRE((ended));
+    REQUIRE((waiter_closed));
+    REQUIRE((rig.fake->sent().size() == 3));
+    REQUIRE((rig.session->health().tx_frames == 3));
+}
+
+TEST_CASE("closed Python runtimes cannot cancel a reopened endpoint", "[comm][python-phase2]") {
+    Rig rig;
+    auto transaction = plan();
+    transaction.consume = {};
+    using Access = linkerbot::hand::unified_detail::RuntimeAccess;
+    Access::with_response_windows(
+        *rig.runtime, [](auto next) { return next; },
+        [&] { (void)rig.runtime->execute(transaction, Clock::now() + 1s); });
+    rig.runtime->close();
+    Access::retire_closed_profiles(rig.session);
+    const auto next = DeviceRuntime::acquire(rig.session, "test/0x28", {{0x28, false}});
+    Access::resume_endpoint(*next);
+    rig.runtime->cancel_all();
+    const auto result = next->execute(transaction, Clock::now() + 1s);
+    const auto frames = rig.session->health().tx_frames;
+    next->close();
+    REQUIRE((rig.runtime->runtime_health().state == linkerbot::hand::runtime::DeviceState::closed));
+    REQUIRE((result.valid));
+    REQUIRE((frames == 2));
+}
+
+namespace {
+    struct PostAcceptanceRace {
+        std::atomic<bool> observed{false};
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::shared_future<void> gate = release.get_future().share();
+    };
+    class PostAcceptanceError : public linkerbot::hand::ProtocolError {
+    public:
+        explicit PostAcceptanceError(std::shared_ptr<PostAcceptanceRace> state)
+            : ProtocolError("injected post-acceptance failure"), state_(std::move(state)) {}
+        const char *what() const noexcept override {
+            try {
+                if (!state_->observed.exchange(true)) {
+                    state_->entered.set_value();
+                    state_->gate.wait();
+                }
+            } catch (...) {
+                return "post-acceptance fixture synchronization failed";
+            }
+            return ProtocolError::what();
+        }
+
+    private:
+        std::shared_ptr<PostAcceptanceRace> state_;
+    };
+}
+
+TEST_CASE("late physical completion cannot publish profile success before its send observer", "[comm][python-phase2]") {
+    Rig rig;
+    const auto state = std::make_shared<PostAcceptanceRace>();
+    auto error_recording = state->entered.get_future();
+    std::promise<linkerbot::transport::SendReceipt> accepted;
+    auto receipt_future = accepted.get_future();
+    std::atomic<bool> observed{false};
+    rig.fake->arm_tx_gate();
+    auto sending = std::async(std::launch::async, [&] {
+        try {
+            using Access = linkerbot::hand::unified_detail::RuntimeAccess;
+            Access::with_response_windows(
+                *rig.runtime, [](auto next) { return next; },
+                [&] {
+                    Access::execute_command(
+                        *rig.runtime, Clock::now() + 5s, true, [&](const auto &, bool) { observed.store(true); },
+                        [](const auto &) { return true; }, {},
+                        [&] { (void)rig.runtime->execute(plan(), Clock::now() + 5s); }, {}, {},
+                        [&](const auto &receipt, bool) {
+                            accepted.set_value(receipt);
+                            throw PostAcceptanceError(state);
+                        });
+                });
+        } catch (const linkerbot::hand::HandError &) {
+            return true;
+        }
+        return false;
+    });
+    const auto captured = receipt_future.wait_for(1s);
+    const auto recording = error_recording.wait_for(1s);
+    const bool claimed = rig.fake->wait_until_tx_entered(1s);
+    std::optional<linkerbot::transport::SendReceipt> receipt;
+    if (captured == std::future_status::ready) {
+        receipt = receipt_future.get();
+    }
+    rig.fake->release_tx_gate();
+    bool completed = false;
+    if (receipt) {
+        try {
+            (void)receipt->wait_result_until(Clock::now() + 1s);
+            completed = true;
+        } catch (const linkerbot::can::TimeoutError &) {
+            completed = false;
+        }
+    }
+    state->release.set_value();
+    const bool error_preserved = sending.get();
+    linkerbot::hand::unified_detail::RuntimeAccess::flush_sends(*rig.runtime);
+    REQUIRE((captured == std::future_status::ready));
+    REQUIRE((recording == std::future_status::ready));
+    REQUIRE((claimed));
+    REQUIRE((completed));
+    REQUIRE((error_preserved));
+    REQUIRE((observed.load()));
+    REQUIRE((rig.session->health().tx_frames == 1));
 }

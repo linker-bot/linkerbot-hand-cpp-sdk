@@ -4022,6 +4022,7 @@ TEST_CASE("Python runtime initializes reads and recovers each Classic and L30 mo
         device.open();
         REQUIRE((device.get_angles(std::chrono::seconds{2}).meta.valid));
         REQUIRE((device.refresh_device_info(std::chrono::seconds{2}).model == model));
+        REQUIRE((device.verify_identity(std::chrono::seconds{2}).model == model));
         device.recover_for(std::chrono::seconds{2});
         REQUIRE((device.is_open()));
         REQUIRE((device.get_cached_snapshot().connection_generation == 2));

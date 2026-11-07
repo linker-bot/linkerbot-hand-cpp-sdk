@@ -77,6 +77,7 @@ namespace linkerbot::hand::unified_detail {
                   owned_session_(std::move(owned_session)), execution_gate_(std::make_shared<ExecutionGate>()),
                   dispatch_guard_(std::make_shared<DispatchGuard>()) {
                 if (config_.runtime_behavior == RuntimeBehavior::kPython) {
+                    RuntimeAccess::resume_endpoint(*device_->runtime());
                     reads_ = std::make_unique<ReadCoordinator<ReadValue>>(config_.read_waiter_capacity);
                     return;
                 }
@@ -202,6 +203,12 @@ namespace linkerbot::hand::unified_detail {
                 auto bounded = request;
                 bounded.timeout = runtime::remaining(deadline);
                 CommandOutcome outcome;
+                RuntimeAccess::AdmitSend admit_send;
+                if (config_.runtime_behavior == RuntimeBehavior::kPython && request.delivery) {
+                    admit_send = [delivery = request.delivery](const RuntimeAccess::Submission &submit, bool final) {
+                        return delivery->admit(submit, final);
+                    };
+                }
                 try {
                     with_windows([&] {
                         RuntimeAccess::execute_command(
@@ -230,7 +237,8 @@ namespace linkerbot::hand::unified_detail {
                                 if (delivery) {
                                     delivery->accepted(receipt, final);
                                 }
-                            });
+                            },
+                            std::move(admit_send));
                     });
                 } catch (...) {
                     if (request.delivery && request.ack_expectation == AckExpectation::kNone) {
@@ -555,8 +563,23 @@ namespace linkerbot::hand::unified_detail {
             }
 
             void assert_external_lifecycle() const override { device_->runtime()->assert_external_lifecycle(); }
+            void stop_admission() override {
+                if (reads_) {
+                    RuntimeAccess::stop_endpoint(*device_->runtime());
+                }
+            }
+            void resume_admission() override {
+                if (reads_) {
+                    reads_->drain();
+                    RuntimeAccess::resume_endpoint(*device_->runtime());
+                    reads_->activate();
+                }
+            }
             void cancel_commands() override {
                 ++read_epoch_;
+                if (reads_) {
+                    reads_->invalidate();
+                }
                 device_->runtime()->cancel_all();
             }
             void stop_polling() override { device_->stop_polling(); }
@@ -689,6 +712,9 @@ namespace linkerbot::hand::unified_detail {
                 "pass make_pcan_transport_factory(), make_minicanfd_transport_factory() or a Session");
         }
 #endif
+        if (session && config.runtime_behavior == RuntimeBehavior::kPython) {
+            RuntimeAccess::retire_closed_profiles(session);
+        }
         const bool injected = static_cast<bool>(session);
         switch (config.model) {
         case Model::kL6: {
