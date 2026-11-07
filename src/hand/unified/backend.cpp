@@ -623,24 +623,18 @@ namespace linkerbot::hand::unified_detail {
                            read_epoch_.load(std::memory_order_acquire) == epoch;
                 };
             }
-            void with_windows(const std::function<void()> &execute, std::function<bool()> valid = {},
+            void with_windows(const std::function<void()> &execute, const std::function<bool()> &valid = {},
                               bool identity = false) {
                 if (config_.runtime_behavior != RuntimeBehavior::kPython) {
                     execute();
                     return;
                 }
-                RuntimeAccess::with_response_windows(
-                    *device_->runtime(),
-                    [this, identity](runtime::TransactionPlan plan) {
-                        plan = python_transaction(std::move(plan), config_);
-                        if (identity && plan.consume) {
-                            plan.response_window = config_.identity_timeout;
-                        }
-                        return plan;
-                    },
-                    execute,
+                // Keep policy-owned callbacks out of native exception unwinding.
+                // The out-of-line scope owns those objects only on the Python path.
+                execute_python_transactions(
+                    *device_->runtime(), config_, execute,
                     runtime::Deadline{runtime::Clock::duration{execution_deadline_.load(std::memory_order_acquire)}},
-                    std::move(valid));
+                    valid, identity);
             }
             HandDeviceConfig config_;
             DeviceCapabilities capabilities_;

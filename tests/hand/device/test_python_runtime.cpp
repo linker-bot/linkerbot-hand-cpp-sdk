@@ -543,3 +543,27 @@ TEST_CASE("Python identity response windows are independent of the ordinary tran
     REQUIRE((entered == std::future_status::ready));
     REQUIRE((identity.model == Model::kL6));
 }
+
+TEST_CASE("native and Python policies preserve command errors during unwinding", "[comm][python-phase2]") {
+    for (const auto behavior : {RuntimeBehavior::kNative, RuntimeBehavior::kPython}) {
+        auto config = python_config();
+        config.runtime_behavior = behavior;
+        config.command_timeout = 30ms;
+        config.response_timeout = 30ms;
+        validation::FakeHand device(config);
+        device.transport->on_request(0x28, [](const auto &request) {
+            if (request.data[0] == 0xC6) {
+                return std::vector<linkerbot::can::Message>{};
+            }
+            return validation::l6_reply(request);
+        });
+        const auto failed = device.hand.set_stall_thresholds(std::vector<double>(6, 20));
+        REQUIRE((failed.wait_for(2s)));
+        REQUIRE((failed.stage() == CommandStage::kFailed));
+        REQUIRE_THROWS_AS(std::rethrow_exception(failed.error()), TimeoutError);
+        const auto next = device.hand.set_angles(std::vector<int32_t>(6, 20));
+        validation::complete(next);
+        REQUIRE((next.stage() == CommandStage::kDispatched));
+        device.hand.close();
+    }
+}
