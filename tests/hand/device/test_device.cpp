@@ -4006,3 +4006,26 @@ TEST_CASE("unified polling accepts deployed measured-speed and voltage channels"
         device.close();
     }
 }
+
+TEST_CASE("Python runtime initializes reads and recovers each Classic and L30 model", "[comm][python-phase2]") {
+    for (const auto model : {Model::kL6, Model::kO6, Model::kL20Lite, Model::kL20, Model::kL30}) {
+        CAPTURE(model);
+        auto config = config_for(model);
+        config.runtime_behavior = RuntimeBehavior::kPython;
+        config.response_timeout = std::chrono::milliseconds{200};
+        std::shared_ptr<o30_comm::HopEndpoint> hop;
+        HandDevice device(config, [&] {
+            auto transport = std::make_unique<FakeTransport>();
+            install_fake_device(model, transport.get(), hop);
+            return transport;
+        });
+        device.open();
+        REQUIRE((device.get_angles(std::chrono::seconds{2}).meta.valid));
+        REQUIRE((device.refresh_device_info(std::chrono::seconds{2}).model == model));
+        device.recover_for(std::chrono::seconds{2});
+        REQUIRE((device.is_open()));
+        REQUIRE((device.get_cached_snapshot().connection_generation == 2));
+        device.close();
+        REQUIRE_FALSE(device.is_open());
+    }
+}

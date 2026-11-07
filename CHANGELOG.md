@@ -2,6 +2,11 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.6
+
+- Add an opt-in Python runtime policy for coalesced reads, response-stage windows, strict matching responses, close terminal outcomes and bounded explicit recovery.
+- Preserve native defaults and the transport v0.3.4 minimum. Rebuild consumers. See [release notes](RELEASE_NOTES.md) and the [behavior baseline](docs/en/guides/python-behavior-baseline.md) for validation limits.
+
 ## 0.3.5
 
 - Add missing unified speed/voltage polling, correct O30 V25 freshness, and add non-destructive identity refresh and lifecycle-readable caches.

@@ -212,6 +212,9 @@ namespace linkerbot::hand::l30 {
             throw QuarantinedError(std::string("L30 response ID quarantined; ") + e.what(), e.context(),
                                    std::current_exception());
         } catch (const TimeoutError &e) {
+            if (dynamic_cast<const ResponseTimeoutError *>(&e)) {
+                throw;
+            }
             throw TimeoutError("No L30 response received within " + std::to_string(timeout.count()) + "ms: " + e.what(),
                                e.context(), std::current_exception());
         }
@@ -228,6 +231,9 @@ namespace linkerbot::hand::l30 {
             throw QuarantinedError(std::string("L30 tactile response ID quarantined; ") + e.what(), e.context(),
                                    std::current_exception());
         } catch (const TimeoutError &e) {
+            if (dynamic_cast<const ResponseTimeoutError *>(&e)) {
+                throw;
+            }
             throw TimeoutError("No L30 tactile response received within " + std::to_string(timeout.count()) +
                                    "ms: " + e.what(),
                                e.context(), std::current_exception());

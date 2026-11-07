@@ -1776,3 +1776,97 @@ TEST_CASE("comm: terminal receipt publishes completed session accounting", "[com
     REQUIRE(after.tx_frames == before.tx_frames + receipt.sent_frames);
     request.cancel();
 }
+
+TEST_CASE("unbounded legacy timeout conversions saturate instead of wrapping", "[comm][python-phase2]") {
+    using namespace linkerbot::hand::runtime;
+    REQUIRE((deadline_after(std::chrono::milliseconds::max()) == Deadline::max()));
+    REQUIRE((deadline_after(remaining(Deadline::max())) == Deadline::max()));
+}
+
+TEST_CASE("required response windows buffer an early protocol failure until delivery is known",
+          "[comm][python-phase2]") {
+    Rig rig;
+    auto plan = linkerbot::hand::o6::protocol::read_angle(0x28);
+    plan.response_window = 40ms;
+    plan.defer_errors_until_send = true;
+    plan.consume = [](const Message &) -> linkerbot::hand::protocol::Progress {
+        throw linkerbot::hand::ProtocolError("injected malformed response");
+    };
+    rig.fake->arm_tx_gate();
+    const auto request = rig.runtime->submit(plan, Clock::now() + 2s);
+    const bool entered = rig.fake->wait_until_tx_entered(500ms);
+    Message reply{};
+    reply.id = 0x28;
+    reply.dlc = 2;
+    reply.data[0] = 1;
+    rig.fake->inject(reply);
+    std::this_thread::sleep_for(10ms);
+    const bool early_done = request.completed();
+    rig.fake->release_tx_gate();
+    REQUIRE((entered));
+    REQUIRE_FALSE(early_done);
+    REQUIRE_THROWS_AS(request.wait(), linkerbot::hand::ProtocolError);
+    REQUIRE(
+        (test_support::require_value(request.send_result()).outcome == linkerbot::transport::SendOutcome::dispatched));
+}
+
+TEST_CASE("required response decoding cannot overrun its response window", "[comm][python-phase2]") {
+    Rig rig;
+    auto transaction = plan();
+    transaction.response_window = 20ms;
+    transaction.defer_errors_until_send = true;
+    const auto decode = transaction.consume;
+    transaction.consume = [decode](const Message &message) {
+        std::this_thread::sleep_for(50ms);
+        return decode(message);
+    };
+    rig.fake->on_request(0x28, [](const Message &request) {
+        auto response = request;
+        response.dlc = 7;
+        return std::vector<Message>{response};
+    });
+    REQUIRE_THROWS_AS(rig.runtime->execute(transaction, Clock::now() + 1s), linkerbot::hand::ResponseTimeoutError);
+}
+
+TEST_CASE("recovery quiet waits can be interrupted without waiting for the quiet interval", "[comm][python-phase2]") {
+    Rig rig;
+    std::atomic<bool> cancelled{false};
+    auto quiet = std::async(std::launch::async, [&] {
+        try {
+            linkerbot::hand::unified_detail::RuntimeAccess::wait_endpoint_quiet(*rig.runtime, 1s, Clock::now() + 2s,
+                                                                                [&] { return cancelled.load(); });
+            return false;
+        } catch (const linkerbot::hand::ClosedError &) {
+            return true;
+        }
+    });
+    cancelled.store(true);
+    const auto interrupted = quiet.wait_for(200ms);
+    const bool closed = quiet.get();
+    REQUIRE((interrupted == std::future_status::ready));
+    REQUIRE((closed));
+}
+
+TEST_CASE("recovery quiet windows do not include another device route", "[comm][python-phase2]") {
+    Rig rig;
+    std::atomic<bool> stop{false};
+    auto peer = std::thread([&] {
+        Message message{};
+        message.id = 0x27;
+        message.dlc = 1;
+        while (!stop.load()) {
+            rig.fake->inject(message);
+            std::this_thread::sleep_for(2ms);
+        }
+    });
+    std::exception_ptr error;
+    try {
+        linkerbot::hand::unified_detail::RuntimeAccess::wait_endpoint_quiet(*rig.runtime, 20ms, Clock::now() + 500ms,
+                                                                            [] { return false; });
+    } catch (...) {
+        error = std::current_exception();
+    }
+    stop.store(true);
+    peer.join();
+    REQUIRE_FALSE(error);
+}

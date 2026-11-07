@@ -1,5 +1,18 @@
 # Release notes
 
+## 0.3.6
+
+- Add an explicit `RuntimeBehavior::kPython` policy for the unified facade. The native policy remains the default. Classic L6, O6, L20Lite, L20, L30 and explicit O30 V25 are in scope; L6 HOP and mounted O30 retain their existing native path.
+- Coalesce equivalent active reads, identity refreshes and polling by device. Callers retain independent wait deadlines and bounded admission. A timed-out reader cannot cancel another reader's transaction. Latest setters remain replaceable until the device transaction lane is available. The existing transport Session remains the physical sender.
+- Start required response windows after physical batch completion, retain a separate recovery execution deadline, and buffer early replies/errors until delivery is known. Classic identity uses one four-request batch with the Python 5 ms spacing. Protocol defaults and an explicit response-window override are available without changing native timeout defaults.
+- Reject matching malformed Classic vector, bank and identity responses in the opt-in path. Preserve the last successful cache and apply finite late-response guards. Unrelated routes and opcodes remain unmatched.
+- Preserve the physical outcome of a claimed dispatch-only command during close. Unclaimed commands fail closed; a required-ACK command cannot become successful from delivery alone. No command is replayed on reopen or recovery.
+- Let concurrent callers join an explicit recovery cycle, with independent waits. Retry response-window loss only, after an endpoint quiet period, without reopening the transport for every initialization attempt. Protocol, identity and transport failures stop the cycle. Failed preparation cannot start a later reconnect; explicit recovery is also allowed from Faulted.
+
+The minimum and paired transport remain v0.3.4 (`0e190032d65ed0b315337b45b3779cf4f650ed68`). Rebuild the SDK and downstream consumers with matching headers and static libraries. Existing signatures and native default behavior remain available; binary compatibility with earlier headers is not claimed.
+
+Validation is offline unless a separate hardware record states otherwise. FakeTransport regressions and pinned Python behavior vectors cover the changed transaction and lifecycle paths. Native/source/prebuilt/installed consumers, sanitizers, static analysis and the twelve-target package matrix remain release gates. No new physical-device acceptance is claimed. Deployed adapters, drivers, firmware, timestamps and mixed-device channel behavior still require hardware acceptance. O20, Python bindings, automatic reconnect/adaptive feedback parity and hand/arm integration are not included.
+
 ## 0.3.5
 
 - Add unified polling for measured speeds on L20Lite, L20, L30 and O30, and voltages on O30, using the existing native polling and Session send path.

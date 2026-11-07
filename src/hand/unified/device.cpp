@@ -111,8 +111,9 @@ namespace linkerbot::hand {
             unified_detail::validate_config(config_);
             declared_capabilities_ = declared_capabilities(config_);
             cached_snapshot_ = unified_detail::initial_cached_snapshot(declared_capabilities_);
-            scheduler_ = std::make_unique<unified_detail::CommandScheduler>(config_.command_rate_hz,
-                                                                            config_.discrete_queue_capacity);
+            scheduler_ = std::make_unique<unified_detail::CommandScheduler>(
+                config_.command_rate_hz, config_.discrete_queue_capacity, unified_detail::CommandScheduler::Now{},
+                config_.runtime_behavior == RuntimeBehavior::kPython);
         }
 
         template <typename... Args> static std::shared_ptr<Impl> create(Args &&...args) {
@@ -155,7 +156,7 @@ namespace linkerbot::hand {
         }
 
         void close_backend();
-        void recover_backend();
+        void recover_backend(runtime::Deadline preparation_deadline = runtime::Deadline::max());
         [[nodiscard]] HandSnapshot snapshot();
 
         void retain_snapshot() noexcept {
@@ -214,15 +215,34 @@ namespace linkerbot::hand {
                                context);
         }
 
-        void lifecycle(const std::shared_ptr<Impl> &owner, const char *operation, const std::function<void()> &action) {
-            const auto deadline = std::chrono::steady_clock::now() + config_.shutdown_timeout;
+        void lifecycle(const std::shared_ptr<Impl> &owner, const char *operation, const std::function<void()> &action,
+                       std::optional<std::chrono::milliseconds> caller_timeout = {}) {
+            const bool independent =
+                config_.runtime_behavior == RuntimeBehavior::kPython && std::string_view(operation) == "recover";
+            const auto deadline = runtime::deadline_after(caller_timeout.value_or(config_.shutdown_timeout));
+            const auto expired = [&] {
+                if (independent) {
+                    throw TimeoutError("caller recovery wait expired; recovery continues");
+                }
+                shutdown_expired(operation);
+            };
             std::unique_lock<std::timed_mutex> lock(lifecycle_mutex_, std::defer_lock);
             if (!lock.try_lock_until(deadline)) {
-                shutdown_expired(operation);
+                expired();
             }
             if (lifecycle_result_.valid()) {
+                if (independent && lifecycle_is_recovery_ &&
+                    lifecycle_result_.wait_for(std::chrono::milliseconds{0}) != std::future_status::ready) {
+                    const auto shared = lifecycle_result_;
+                    lock.unlock();
+                    if (shared.wait_until(deadline) != std::future_status::ready) {
+                        expired();
+                    }
+                    shared.get();
+                    return;
+                }
                 if (lifecycle_result_.wait_until(deadline) != std::future_status::ready) {
-                    shutdown_expired(operation);
+                    expired();
                 }
                 lifecycle_worker_.join();
                 // A subsequent close cleans up even when the previous recovery
@@ -235,6 +255,7 @@ namespace linkerbot::hand {
                     return;
                 }
             }
+            lifecycle_is_recovery_ = std::string_view(operation) == "recover";
             auto result = std::make_shared<std::promise<void>>();
             lifecycle_result_ = result->get_future().share();
             auto &cleanup = CleanupQueue::instance();
@@ -258,8 +279,17 @@ namespace linkerbot::hand {
                 lifecycle_result_ = {};
                 throw;
             }
+            if (independent) {
+                const auto shared = lifecycle_result_;
+                lock.unlock();
+                if (shared.wait_until(deadline) != std::future_status::ready) {
+                    expired();
+                }
+                shared.get();
+                return;
+            }
             if (lifecycle_result_.wait_until(deadline) != std::future_status::ready) {
-                shutdown_expired(operation);
+                expired();
             }
             lifecycle_worker_.join();
             auto completed = std::move(lifecycle_result_);
@@ -463,9 +493,24 @@ namespace linkerbot::hand {
                 return context.generation == generation_.load(std::memory_order_acquire) &&
                        state_.load(std::memory_order_acquire) == State::kReady;
             };
+            if (config_.runtime_behavior == RuntimeBehavior::kPython) {
+                request.prepare_execution = [this, context, operation, valid = request.generation_valid](
+                                                runtime::CancellationToken cancellation) {
+                    struct Prepared {
+                        std::shared_lock<std::shared_mutex> io;
+                        std::shared_ptr<void> lane;
+                    };
+                    auto prepared = std::make_shared<Prepared>(Prepared{begin_io(context, operation), {}});
+                    prepared->lane = context.backend->prepare_command(cancellation, valid);
+                    return std::shared_ptr<void>(std::move(prepared));
+                };
+            }
             auto execute = [this, context, operation](const unified_detail::CommandRequest &accepted) {
                 try {
-                    auto lease = begin_io(context, operation);
+                    std::optional<std::shared_lock<std::shared_mutex>> lease;
+                    if (!accepted.execution_lease) {
+                        lease.emplace(begin_io(context, operation));
+                    }
                     return complete_io(context, operation, [&] { return context.backend->submit(accepted); });
                 } catch (...) {
                     const std::lock_guard<std::mutex> lock(mutex_);
@@ -599,6 +644,7 @@ namespace linkerbot::hand {
         std::timed_mutex lifecycle_mutex_;
         std::thread lifecycle_worker_;
         std::shared_future<void> lifecycle_result_;
+        bool lifecycle_is_recovery_ = false;
         std::shared_mutex io_mutex_;
         std::shared_ptr<unified_detail::DeviceBackend> backend_;
         std::atomic<uint64_t> generation_{0};
@@ -1379,22 +1425,43 @@ namespace linkerbot::hand {
         impl_->polling_plan_.reset();
     }
 
-    void HandDevice::recover() {
+    void HandDevice::recover() { recover_for(impl_->config_.shutdown_timeout); }
+
+    void HandDevice::recover_for(std::chrono::milliseconds timeout) {
+        if (timeout.count() <= 0) {
+            throw ValidationError("recovery caller timeout must be positive");
+        }
         impl_->assert_external_lifecycle();
-        impl_->ensure_ready("recover");
-        impl_->lifecycle(impl_, "recover", [owner = impl_] { owner->recover_backend(); });
+        if (impl_->config_.runtime_behavior != RuntimeBehavior::kPython) {
+            impl_->ensure_ready("recover");
+        }
+        const auto preparation_deadline = runtime::deadline_after(timeout);
+        impl_->lifecycle(
+            impl_, "recover", [owner = impl_, preparation_deadline] { owner->recover_backend(preparation_deadline); },
+            timeout);
     }
 
-    void HandDevice::Impl::recover_backend() {
+    void HandDevice::Impl::recover_backend(runtime::Deadline caller_preparation_deadline) {
         auto *impl_ = this;
         impl_->retain_snapshot();
-        const auto context = impl_->capture("recover");
+        const auto context = [&] {
+            const std::lock_guard<std::mutex> lock(impl_->mutex_);
+            if (impl_->config_.runtime_behavior != RuntimeBehavior::kPython) {
+                static_cast<void>(impl_->require_ready("recover"));
+            } else if (!impl_->backend_ || !impl_->expected_identity_ ||
+                       (impl_->state_ != Impl::State::kReady && impl_->state_ != Impl::State::kFaulted)) {
+                throw DeviceNotReadyError("recover requires an initialized Ready or Faulted device");
+            }
+            return ExecutionContext{impl_->backend_, impl_->declared_capabilities_, impl_->generation_};
+        }();
         auto &selected = *context.backend;
         std::optional<PollingPlan> restore;
         DeviceIdentity expected_identity;
         {
             const std::lock_guard<std::mutex> lock(impl_->mutex_);
-            impl_->check_context(context, "recover");
+            if (context.generation != impl_->generation_ || context.backend != impl_->backend_) {
+                throw ClosedError("recovery generation ended before preparation");
+            }
             restore = impl_->polling_plan_;
             expected_identity = ::linkerbot::hand::detail::checked_value(
                 impl_->expected_identity_, "missing runtime state: impl_->expected_identity_");
@@ -1413,21 +1480,59 @@ namespace linkerbot::hand {
         // Drain composite facade operations before native recovery clears its
         // caches. A captured old request must pass its epoch check after taking
         // a lease, so it cannot start sending in the recovered runtime.
-        const std::unique_lock<std::shared_mutex> drain(impl_->io_mutex_);
+        const bool python = impl_->config_.runtime_behavior == RuntimeBehavior::kPython;
+        const auto execution_deadline =
+            python ? runtime::deadline_after(impl_->config_.recovery_timeout) : runtime::Deadline::max();
+        const auto preparation_deadline = std::min({execution_deadline, caller_preparation_deadline,
+                                                    runtime::deadline_after(impl_->config_.shutdown_timeout)});
+        std::unique_lock<std::shared_mutex> drain(impl_->io_mutex_, std::defer_lock);
+        if (python) {
+            while (!drain.try_lock()) {
+                if (runtime::Clock::now() >= preparation_deadline) {
+                    const std::lock_guard<std::mutex> lock(impl_->mutex_);
+                    if (impl_->generation_ == context.generation + 1) {
+                        impl_->state_.store(Impl::State::kFaulted, std::memory_order_release);
+                    }
+                    throw TimeoutError("recovery preparation did not drain before its deadline");
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+        } else {
+            drain.lock();
+        }
         const auto recovery_generation = context.generation + 1;
         const auto previous_generation = selected.health().connection_generation;
         const auto declared = declared_capabilities(impl_->config_);
 
+        if (python) {
+            selected.set_execution_deadline(execution_deadline);
+        }
+        struct ResetDeadline {
+            unified_detail::DeviceBackend &backend;
+            ~ResetDeadline() { backend.set_execution_deadline(runtime::Deadline::max()); }
+        } reset_deadline{selected};
+        auto retry_quiet = impl_->config_.recovery_quiet;
         std::exception_ptr last_error;
         for (uint32_t attempt = 0; attempt < impl_->config_.recovery_attempts; ++attempt) {
-            if (attempt != 0 && impl_->config_.recovery_backoff.count() > 0) {
-                std::this_thread::sleep_for(impl_->config_.recovery_backoff);
-            }
             try {
+                if (python && attempt != 0) {
+                    selected.wait_quiet(retry_quiet, execution_deadline,
+                                        [&] { return impl_->generation_ != recovery_generation; });
+                } else if (attempt != 0 && impl_->config_.recovery_backoff.count() > 0) {
+                    std::this_thread::sleep_for(impl_->config_.recovery_backoff);
+                }
                 if (impl_->generation_.load(std::memory_order_acquire) != recovery_generation) {
                     throw ClosedError("recovery generation ended before attempt");
                 }
-                selected.recover();
+                if (python && attempt == 0) {
+                    selected.drain_sends(preparation_deadline);
+                    if (runtime::Clock::now() >= preparation_deadline) {
+                        throw TimeoutError("recovery preparation deadline expired");
+                    }
+                }
+                if (!python || attempt == 0) {
+                    selected.recover();
+                }
                 if (impl_->generation_.load(std::memory_order_acquire) != recovery_generation) {
                     throw ClosedError("recovery generation ended during reconnect");
                 }
@@ -1464,8 +1569,16 @@ namespace linkerbot::hand {
             } catch (const IdentityMismatchError &) {
                 last_error = std::current_exception();
                 break;
+            } catch (const ResponseTimeoutError &error) {
+                last_error = std::current_exception();
+                retry_quiet = std::max({impl_->config_.recovery_quiet,
+                                        std::chrono::ceil<std::chrono::milliseconds>(error.response_window()),
+                                        error.late_guard()});
             } catch (...) {
                 last_error = std::current_exception();
+                if (python) {
+                    break;
+                }
             }
             try {
                 selected.stop_polling();
@@ -1478,7 +1591,9 @@ namespace linkerbot::hand {
             if (impl_->generation_ == recovery_generation) {
                 impl_->identity_.reset();
                 impl_->verified_capabilities_.reset();
-                impl_->polling_plan_.reset();
+                if (!python) {
+                    impl_->polling_plan_.reset();
+                }
                 impl_->snapshot_sequence_ = 0;
                 impl_->last_snapshot_time_.reset();
                 impl_->state_.store(Impl::State::kFaulted, std::memory_order_release);

@@ -47,7 +47,8 @@ namespace linkerbot::hand {
         // model-specific safety baseline. Commands are admitted only after
         // every initialization step succeeds.
         void open();
-        // Stops admission and fails every unfinished setter with ClosedError.
+        // Stops admission. The native policy fails unfinished setters closed.
+        // The Python policy retains a claimed dispatch-only delivery's outcome.
         // Waits at most shutdown_timeout for cleanup, then throws TimeoutError
         // and remains non-Ready while retained resources finish cleanup.
         // Runtime callbacks must schedule close on an external thread instead.
@@ -200,8 +201,12 @@ namespace linkerbot::hand {
         // and restores only the previous polling plan. Targets and discrete
         // commands are never replayed. Failure leaves the facade Faulted until
         // close()/open(). Recovery also consumes the total shutdown_timeout
-        // caller budget; expiry cannot later restore Ready.
+        // caller budget; expiry cannot later restore Ready in the native policy.
+        // The explicit Python policy uses the shared cycle described below.
         void recover();
+        // Python runtime profile: caller wait only; a timeout does not cancel
+        // the shared recovery cycle. Native profile keeps its existing policy.
+        void recover_for(std::chrono::milliseconds timeout);
 
         // A bounded stream of common cached telemetry. Model-specific streams
         // remain available on the concrete model classes.

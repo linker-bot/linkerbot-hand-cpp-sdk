@@ -57,3 +57,10 @@ python3 validation/check_documented_examples.py \
 
 六型号实机验收单独记录型号/序列号、固件、驱动、源码版本、完整回复、连续目标、
 断连恢复及安全观察。离线通过不证明机械到位、固件兼容或版本已发布。
+
+CTest 也会以显式 Python 运行时策略执行 C++ 探针。运行器的
+`--cpp-python-profile` 将该策略与固定样本的 Python 期望比较。C++ handle
+接口不变：调用者等待超时仍由 `wait_for()` 返回 `false`，Python 则抛出
+`TimeoutError`；运行器明确检查这项绑定差异。原生默认期望仍单独执行。
+启用可选 Python 源码比较后，十个场景产生三十项观测，分别来自原生 C++、
+显式兼容策略和 Python。这是 L6 离线验收语料，不能据此声称所有型号或硬件等价。

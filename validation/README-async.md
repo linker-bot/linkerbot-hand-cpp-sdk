@@ -75,3 +75,12 @@ Six-model hardware acceptance remains separate. Record model/serial, firmware,
 transport/driver, SDK revisions, complete replies, continuous target delivery,
 disconnection/recovery and safety observations. Offline success is not evidence
 of mechanical arrival, firmware compatibility or a published release.
+
+CTest also runs the C++ probe with the explicit Python runtime policy. The runner's
+`--cpp-python-profile` option compares that policy with the fixture's Python
+expectations. The C++ handle API remains unchanged: `wait_for()` returns `false`
+on a caller timeout, while Python raises `TimeoutError`; the runner checks this
+binding difference explicitly. Native-default expectations remain a separate run.
+The optional Python checkout therefore produces thirty observations for ten
+scenarios (native C++, the opt-in policy, and Python). This is an offline L6
+acceptance corpus, not evidence of complete model or hardware equivalence.

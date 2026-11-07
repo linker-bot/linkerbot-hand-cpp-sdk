@@ -69,6 +69,11 @@ namespace linkerbot::hand::protocol {
         // Ambiguous feedback keys remain poisoned for reads; subsequent writes still
         // transmit but cannot publish feedback until explicit recovery.
         bool supersede_optional_feedback = false;
+        // Required response budget starts at the physical batch completion.
+        // The submit deadline remains an independent total execution bound.
+        std::optional<std::chrono::microseconds> response_window;
+        // Keep a matching early error until the physical receipt is known.
+        bool defer_errors_until_send = false;
     };
 
     class ProtocolBackend {

@@ -20,7 +20,7 @@ namespace linkerbot::hand::unified_detail {
         using Clock = std::chrono::steady_clock;
         using Now = std::function<Clock::time_point()>;
         using Execute = std::function<CommandHandle(const CommandRequest &)>;
-        CommandScheduler(double rate_hz, size_t capacity, Now now = {});
+        CommandScheduler(double rate_hz, size_t capacity, Now now = {}, bool python_behavior = false);
         ~CommandScheduler();
         CommandScheduler(const CommandScheduler &) = delete;
         CommandScheduler &operator=(const CommandScheduler &) = delete;
@@ -42,6 +42,7 @@ namespace linkerbot::hand::unified_detail {
             double rate_hz;
             size_t capacity;
             Now now;
+            bool python_behavior;
         };
         CommandScheduler(ConstructorTag, ConstructorArguments arguments);
 
@@ -71,6 +72,7 @@ namespace linkerbot::hand::unified_detail {
         const Clock::duration interval_;
         const size_t capacity_;
         const bool manual_clock_;
+        const bool python_behavior_;
         const Now now_;
         mutable std::mutex mutex_;
         std::condition_variable changed_;
@@ -80,6 +82,8 @@ namespace linkerbot::hand::unified_detail {
         std::optional<Job> active_;
         uint64_t next_id_ = 1;
         bool stop_ = false;
+        uint64_t invalidation_ = 0;
+        std::optional<runtime::CancellationSource> preparing_;
         Clock::time_point next_start_ = Clock::time_point::min();
         std::thread worker_;
         std::thread watcher_;

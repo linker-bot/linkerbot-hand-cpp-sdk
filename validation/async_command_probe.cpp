@@ -9,12 +9,19 @@ using namespace std::chrono_literals;
 
 int main(int argc, char **argv) {
     try {
-        require(argc == 5, "usage: probe scenario capacity targets timeout_ms");
+        require(argc == 5 || (argc == 6 && std::string(argv[5]) == "python"),
+                "usage: probe scenario capacity targets timeout_ms [python]");
+        const bool python = argc == 6;
         const std::string scenario = argv[1];
         const auto capacity = static_cast<size_t>(std::stoul(argv[2]));
         const int targets = std::stoi(argv[3]);
         const int timeout = std::stoi(argv[4]);
-        FakeHand device(config(capacity, scenario == "execution_timeout" ? timeout : 3000));
+        auto settings = config(capacity, scenario == "execution_timeout" ? timeout : 3000);
+        if (python) {
+            settings.runtime_behavior = RuntimeBehavior::kPython;
+            settings.response_timeout = std::chrono::milliseconds{scenario == "execution_timeout" ? timeout : 1000};
+        }
+        FakeHand device(settings);
         auto &hand = device.hand;
         auto *transport = device.transport;
         if (scenario == "admission_invalid") {
@@ -47,9 +54,12 @@ int main(int argc, char **argv) {
             std::cout << R"({"stage":"dispatched","error":null})";
         } else if (scenario == "ack_after_complete_response" || scenario == "execution_timeout") {
             const auto request_seen = std::make_shared<std::promise<void>>();
-            transport->on_request(0x28, [request_seen](const Message &request) {
+            transport->on_request(0x28, [request_seen, python, scenario](const Message &request) {
                 if (request.data[0] == 0xC6 && request.dlc > 1) {
                     request_seen->set_value();
+                    if (python && scenario == "execution_timeout") {
+                        return std::vector<Message>{};
+                    }
                     auto partial = request;
                     partial.dlc = 2;
                     return std::vector<Message>{partial};
@@ -68,7 +78,23 @@ int main(int argc, char **argv) {
                     timed_out = true;
                 }
                 require(timed_out, "wrong execution error");
-                std::cout << R"({"stage":"failed","exception":"timeout","budget":"admission_to_completion"})";
+                std::cout << (python
+                                  ? R"({"stage":"failed","exception":"timeout","budget":"response_window"})"
+                                  : R"({"stage":"failed","exception":"timeout","budget":"admission_to_completion"})");
+            } else if (python) {
+                require(handle.wait_for(2s) && handle.stage() == CommandStage::kFailed,
+                        "malformed response did not fail");
+                bool malformed = false;
+                try {
+                    std::rethrow_exception(handle.error());
+                } catch (const ProtocolError &) {
+                    malformed = true;
+                }
+                require(malformed, "malformed response has the wrong error category");
+                transport->on_request(0x28, l6_reply);
+                complete(hand.set_stall_thresholds(std::vector<double>(6, targets)));
+                std::cout
+                    << R"({"stage":"acknowledged","partial_terminal":true,"partial_stage":"failed+protocol","error":null})";
             } else {
                 require(!handle.wait_for(1ms), "partial response acknowledged command");
                 Message full{};
@@ -145,11 +171,15 @@ int main(int argc, char **argv) {
             const auto claimed = device.block();
             const auto pending = hand.set_stall_thresholds(std::vector<double>(6, targets));
             auto closer = std::async(std::launch::async, [&] { hand.close(); });
-            const auto ended = pending.wait_for(1s) && claimed.wait_for(1s);
+            const auto ended = pending.wait_for(1s) && (python || claimed.wait_for(1s));
             transport->release_tx_gate();
             closer.get();
-            require(ended && pending.stage() == CommandStage::kFailed && claimed.stage() == CommandStage::kFailed,
-                    "close did not invalidate generation");
+            if (python) {
+                complete(claimed);
+            }
+            require(ended && pending.stage() == CommandStage::kFailed &&
+                        claimed.stage() == (python ? CommandStage::kDispatched : CommandStage::kFailed),
+                    "close has the wrong command terminal states");
             bool closed = false;
             try {
                 std::rethrow_exception(pending.error());
@@ -161,7 +191,8 @@ int main(int argc, char **argv) {
             for (const auto &frame : device.transport->sent()) {
                 require(!(frame.data[0] == 0xC6 && frame.dlc > 1), "old configuration replayed");
             }
-            std::cout << R"({"pending":"failed+closed","claimed":"failed+closed","replay":false})";
+            std::cout << (python ? R"({"pending":"failed+closed","claimed":"dispatched","replay":false})"
+                                 : R"({"pending":"failed+closed","claimed":"failed+closed","replay":false})");
         } else if (scenario == "polling_fairness") {
             struct State {
                 std::mutex mutex;
