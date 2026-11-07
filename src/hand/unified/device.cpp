@@ -644,7 +644,6 @@ namespace linkerbot::hand {
         std::timed_mutex lifecycle_mutex_;
         std::thread lifecycle_worker_;
         std::shared_future<void> lifecycle_result_;
-        bool lifecycle_is_recovery_ = false;
         std::shared_mutex io_mutex_;
         std::shared_ptr<unified_detail::DeviceBackend> backend_;
         std::atomic<uint64_t> generation_{0};
@@ -655,22 +654,23 @@ namespace linkerbot::hand {
         std::optional<ErrorInfo> refresh_error_;
         std::optional<DeviceCapabilities> verified_capabilities_;
         std::optional<PollingPlan> polling_plan_;
-        std::atomic<State> state_{State::kClosed};
         HandSnapshot cached_snapshot_;
         uint64_t cache_generation_ = 0;
         uint64_t cache_physical_generation_ = 0;
         uint64_t cache_revision_ = 0;
-        bool cache_valid_ = false;
         std::optional<uint64_t> cached_source_sequence_;
         uint64_t snapshot_sequence_ = 0;
         std::optional<std::chrono::steady_clock::time_point> last_snapshot_time_;
-        std::atomic<bool> open_{false};
         mutable std::mutex snapshot_wait_mutex_;
         mutable std::condition_variable snapshot_cv_;
         std::mutex stream_mutex_;
         std::condition_variable stream_cv_;
         std::shared_ptr<EventQueue<HandEvent>> event_queue_;
         std::thread stream_thread_;
+        bool lifecycle_is_recovery_ = false;
+        std::atomic<State> state_{State::kClosed};
+        bool cache_valid_ = false;
+        std::atomic<bool> open_{false};
         std::atomic<bool> stream_stop_{true};
         // Executor borrows this Impl; retained lifecycle/cleanup ownership joins
         // it before any facade state or backend can be destroyed.
@@ -1545,6 +1545,10 @@ namespace linkerbot::hand {
                 if (impl_->generation_.load(std::memory_order_acquire) != recovery_generation) {
                     throw ClosedError("recovery generation ended before baseline publication");
                 }
+                if (python) {
+                    // Restored polling belongs to Ready, not to the recovery budget.
+                    selected.set_execution_deadline(runtime::Deadline::max());
+                }
                 if (restore) {
                     selected.start_polling(*restore);
                 }
@@ -1552,6 +1556,9 @@ namespace linkerbot::hand {
                 const std::lock_guard<std::mutex> lock(impl_->mutex_);
                 if (impl_->generation_ != recovery_generation) {
                     throw ClosedError("recovery generation ended before Ready");
+                }
+                if (python && runtime::Clock::now() >= execution_deadline) {
+                    throw TimeoutError("recovery execution deadline expired before Ready");
                 }
                 impl_->identity_ = std::move(initialized.identity);
                 impl_->verified_capabilities_ = std::move(initialized.capabilities);

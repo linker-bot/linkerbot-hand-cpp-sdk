@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../detail/checked_optional.hpp"
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -97,7 +98,7 @@ namespace linkerbot::hand::unified_detail {
             if (!entry->value) {
                 throw InternalError("read completed without a value");
             }
-            return *entry->value;
+            return ::linkerbot::hand::detail::checked_value(entry->value, "read completed without a value");
         }
         // Must precede runtime cancellation/draining. No late result can complete
         // a waiter from an invalidated generation.

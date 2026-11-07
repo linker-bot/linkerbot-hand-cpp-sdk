@@ -125,6 +125,9 @@ namespace linkerbot::hand::identity_probe {
                     }
                     if (std::all_of(values.begin(), values.end(),
                                     [](const auto &value) { return value.has_value(); })) {
+                        // Progress owns the std::any payload; lifecycle regressions
+                        // exercise destruction of the complete identity result.
+                        // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
                         return protocol::Progress::complete(values);
                     }
                     return matched ? protocol::Progress::pending() : protocol::Progress::unmatched();

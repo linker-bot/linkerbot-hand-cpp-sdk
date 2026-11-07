@@ -391,8 +391,10 @@ namespace linkerbot::hand::runtime {
                 return {};
             }
             if (*response_deadline <= deadline) {
-                return std::make_exception_ptr(ResponseTimeoutError("device response window expired", context,
-                                                                    *plan.response_window, plan.late_guard));
+                return std::make_exception_ptr(ResponseTimeoutError(
+                    "device response window expired", context,
+                    ::linkerbot::hand::detail::checked_value(plan.response_window, "missing response window"),
+                    plan.late_guard));
             }
             return std::make_exception_ptr(timeout_error("device execution deadline expired"));
         }
@@ -940,16 +942,12 @@ namespace linkerbot::hand::runtime {
                     state->sent_result = ::linkerbot::hand::detail::checked_value(
                                              state->receipt, "missing runtime state: state->receipt")
                                              .result();
-                    if (!state->response_deadline_armed && state->plan.response_window &&
-                        state->sent_result->completed_at && !state->sent_result->error) {
-                        const auto completed = *state->sent_result->completed_at;
-                        const auto window = *state->plan.response_window;
-                        const auto available =
-                            std::chrono::duration_cast<std::chrono::microseconds>(Deadline::max() - completed);
-                        const auto response_deadline = window >= available ? Deadline::max() : completed + window;
-                        state->response_window_expiry = response_deadline <= state->deadline;
-                        state->deadline = std::min(state->deadline, response_deadline);
-                        state->response_deadline_armed = true;
+                    if (!state->response_deadline_armed) {
+                        if (const auto response_deadline = state->receipt_response_deadline()) {
+                            state->response_window_expiry = *response_deadline <= state->deadline;
+                            state->deadline = std::min(state->deadline, *response_deadline);
+                            state->response_deadline_armed = true;
+                        }
                     }
                     state->cv.notify_all();
                 }
@@ -961,7 +959,8 @@ namespace linkerbot::hand::runtime {
                 } else if (Clock::now() >= state->deadline &&
                            !(state->plan.response_window && state->response_window_expiry &&
                              (state->response || state->buffered_error) && state->receipt &&
-                             state->receipt->completed())) {
+                             ::linkerbot::hand::detail::checked_value(state->receipt, "missing response receipt")
+                                 .completed())) {
                     finish_locked(state, state->timeout_exception("device request deadline expired"), true);
                 } else if (state->receipt && ::linkerbot::hand::detail::checked_value(
                                                  state->receipt, "missing runtime state: state->receipt")
@@ -1548,7 +1547,9 @@ namespace linkerbot::hand::runtime {
                 if (const auto execution = p.command_executions.find(state->owner);
                     execution != p.command_executions.end()) {
                     if (execution->second.receipt_accepted) {
-                        execution->second.receipt_accepted(*state->receipt, final_send);
+                        execution->second.receipt_accepted(
+                            ::linkerbot::hand::detail::checked_value(state->receipt, "missing accepted receipt"),
+                            final_send);
                     }
                     if (execution->second.accepted_send) {
                         execution->second.accepted_send();
