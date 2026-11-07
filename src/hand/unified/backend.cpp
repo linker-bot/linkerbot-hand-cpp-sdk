@@ -332,7 +332,10 @@ namespace linkerbot::hand::unified_detail {
             }
 
             [[nodiscard]] DeviceIdentity verify_identity(HandSide side, std::chrono::milliseconds timeout) override {
-                return read_identity(*device_, side, timeout);
+                const auto deadline = runtime::deadline_after(timeout);
+                auto lease = execution_gate_->acquire(false, deadline);
+                dispatch_guard_->wait(deadline, {});
+                return read_identity(*device_, side, runtime::remaining(deadline));
             }
 
             void start_polling(const PollingPlan &plan) override {

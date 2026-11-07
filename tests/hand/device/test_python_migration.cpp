@@ -69,7 +69,7 @@ TEST_CASE("confirmed save requires CF 01 and preserves legacy send-only save", "
             return std::vector<linkerbot::can::Message>{reply};
         });
         device.transport->clear_sent();
-        auto handle = device.hand.save_parameters_confirmed(50ms);
+        auto handle = device.hand.save_parameters_confirmed(200ms);
         REQUIRE((handle.wait_for(1s)));
         REQUIRE((handle.sent_frames() == 1));
         REQUIRE((handle.send_results().size() == 1));
@@ -515,4 +515,26 @@ TEST_CASE("added L6 gain reads and writes reject short matching replies", "[comm
     REQUIRE_THROWS_AS(std::rethrow_exception(handle.error()), ProtocolError);
     REQUIRE((test_support::require_value(device.hand.get_snapshot().position_kp).raw == std::vector<double>(6, 50)));
     REQUIRE_THROWS_AS(device.hand.get_position_kp(), ProtocolError);
+}
+
+TEST_CASE("identity refresh respects a preceding torque transition guard", "[comm][python-migration]") {
+    validation::FakeHand device;
+    std::atomic<int64_t> torque_ns{0}, identity_ns{0};
+    device.transport->on_request(0x28, [&](const auto &request) {
+        const auto now =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        if (request.data[0] == 3) {
+            torque_ns = now;
+        }
+        if (request.data[0] == 0xC0) {
+            identity_ns = now;
+        }
+        return validation::l6_reply(request);
+    });
+    acknowledged(device.hand.set_torques(std::vector<double>(6, 0), 1s));
+    REQUIRE((device.hand.get_device_info(1s).model == Model::kL6));
+    REQUIRE((torque_ns.load() > 0));
+    REQUIRE(
+        (identity_ns.load() - torque_ns.load() >= std::chrono::duration_cast<std::chrono::nanoseconds>(140ms).count()));
 }
