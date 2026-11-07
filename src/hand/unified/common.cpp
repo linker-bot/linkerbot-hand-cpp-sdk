@@ -87,6 +87,16 @@ namespace linkerbot::hand::unified_detail {
             throw ValidationError("HandDevice recovery_backoff must not be negative");
         }
 
+        if (config.o30_layout != O30Layout::kMountedV36 && config.o30_layout != O30Layout::kPythonV25) {
+            throw ValidationError("unknown O30 layout");
+        }
+        if (config.o30_layout == O30Layout::kPythonV25 && config.address.value_or(1) > 0x3FE) {
+            throw ValidationError("O30 V25 request address must be 0..0x3FE");
+        }
+        if (config.o30_layout == O30Layout::kPythonV25 && config.model != Model::kO30) {
+            throw ValidationError("V25 layout is only valid for O30");
+        }
+
         // Also validates that enum values are known without performing I/O.
         static_cast<void>(declared_capabilities(config));
 

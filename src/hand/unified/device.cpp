@@ -404,7 +404,8 @@ namespace linkerbot::hand {
         }
 
         [[nodiscard]] CommandHandle submit_raw(CommandSemantic semantic, const std::vector<double> &values,
-                                               const char *operation) {
+                                               const char *operation,
+                                               std::optional<std::chrono::milliseconds> timeout = {}) {
             const auto context = capture(operation);
             const auto &capabilities = context.capabilities;
             const auto *command = capabilities.command(semantic);
@@ -415,12 +416,19 @@ namespace linkerbot::hand {
             const auto expectation =
                 command->ack_support == AckSupport::kRequired ? AckExpectation::kRequired : AckExpectation::kNone;
             auto raw = validate_command_values(values, *command);
-            return enqueue(context, {semantic, std::move(raw), config_.command_timeout, expectation}, operation);
+            const auto budget = timeout.value_or(config_.command_timeout);
+            if (budget.count() <= 0) {
+                throw ValidationError("command timeout must be positive");
+            }
+            return enqueue(context, {semantic, std::move(raw), budget, expectation}, operation);
         }
 
         [[nodiscard]] CommandHandle enqueue(const ExecutionContext &context, unified_detail::CommandRequest request,
                                             const char *operation) {
             const auto *capability = context.capabilities.command(request.semantic);
+            const auto family = request.operation ? CommandFamily::kDiscreteOperation
+                                                  : unified_detail::command_family(request.semantic);
+            const auto support = request.operation ? AckSupport::kRequired : capability->ack_support;
             request.generation_valid = [this, context] {
                 return context.generation == generation_.load(std::memory_order_acquire) &&
                        state_.load(std::memory_order_acquire) == State::kReady;
@@ -432,23 +440,23 @@ namespace linkerbot::hand {
                 } catch (...) {
                     const std::lock_guard<std::mutex> lock(mutex_);
                     if (context.generation != generation_ || context.backend != backend_) {
-                        throw ClosedError(
-                            "accepted command generation ended",
-                            {operation, unified_detail::model_name(config_.model),
-                             unified_detail::command_family_name(unified_detail::command_family(accepted.semantic)),
-                             context.generation});
+                        throw ClosedError("accepted command generation ended",
+                                          {operation, unified_detail::model_name(config_.model),
+                                           unified_detail::command_family_name(
+                                               accepted.operation ? CommandFamily::kDiscreteOperation
+                                                                  : unified_detail::command_family(accepted.semantic)),
+                                           context.generation});
                     }
                     throw;
                 }
             };
             const std::lock_guard<std::mutex> lock(mutex_);
             check_context(context, operation);
-            return scheduler_->accept(
-                std::move(request), capability->ack_support,
-                {operation, unified_detail::model_name(config_.model),
-                 unified_detail::command_family_name(unified_detail::command_family(capability->semantic)),
-                 context.generation, context.capabilities.transport.request_id},
-                std::move(execute));
+            return scheduler_->accept(std::move(request), support,
+                                      {operation, unified_detail::model_name(config_.model),
+                                       unified_detail::command_family_name(family), context.generation,
+                                       context.capabilities.transport.request_id},
+                                      std::move(execute));
         }
 
         // Called under mutex_ at the same point that closes admission and
@@ -477,6 +485,22 @@ namespace linkerbot::hand {
             finish_io(context, operation);
             std::visit([generation](auto &value) { value.meta.connection_generation = generation; }, sample);
             return sample;
+        }
+
+        [[nodiscard]] CommandHandle enqueue_operation(DeviceOperation operation, std::chrono::milliseconds timeout,
+                                                      const char *name) {
+            const auto context = capture(name);
+            if (!context.capabilities.supports(operation)) {
+                throw UnsupportedOperationError("operation is unsupported");
+            }
+            if (timeout.count() <= 0) {
+                throw ValidationError("operation timeout must be positive");
+            }
+            unified_detail::CommandRequest request;
+            request.operation = operation;
+            request.timeout = timeout;
+            request.ack_expectation = AckExpectation::kRequired;
+            return enqueue(context, std::move(request), name);
         }
 
         [[nodiscard]] CommandHandle operate(DeviceOperation operation, const char *name) {
@@ -879,8 +903,18 @@ namespace linkerbot::hand {
         return impl_->submit_raw(CommandSemantic::Semantic, values, #Method);                                          \
     }
 
+    CommandHandle HandDevice::set_torques(const std::vector<double> &values, std::chrono::milliseconds timeout) {
+        return impl_->submit_raw(CommandSemantic::kTorques, values, "set_torques", timeout);
+    }
+    LINKERBOT_HAND_DEFINE_SETTER(set_torques_limits, kTorqueLimits)
     LINKERBOT_HAND_DEFINE_SETTER(set_speeds, kSpeeds)
     LINKERBOT_HAND_DEFINE_SETTER(set_accelerations, kAccelerations)
+    LINKERBOT_HAND_DEFINE_SETTER(set_position_kp, kPositionKp)
+    LINKERBOT_HAND_DEFINE_SETTER(set_position_kd, kPositionKd)
+    LINKERBOT_HAND_DEFINE_SETTER(set_torque_kd, kTorqueKd)
+    LINKERBOT_HAND_DEFINE_SETTER(set_torque_limits, kTorqueLimits)
+    LINKERBOT_HAND_DEFINE_SETTER(set_motion_times, kMotionTimes)
+    LINKERBOT_HAND_DEFINE_SETTER(set_limit_compensations, kLimitCompensations)
     LINKERBOT_HAND_DEFINE_SETTER(set_current_limits, kCurrentLimits)
     LINKERBOT_HAND_DEFINE_SETTER(set_stall_detection_times, kStallDetectionTimes)
     LINKERBOT_HAND_DEFINE_SETTER(set_stall_thresholds, kStallThresholds)
@@ -895,6 +929,13 @@ namespace linkerbot::hand {
     LINKERBOT_HAND_DEFINE_OPERATION(enable, kEnable)
     LINKERBOT_HAND_DEFINE_OPERATION(disable, kDisable)
     LINKERBOT_HAND_DEFINE_OPERATION(save_parameters, kSaveParameters)
+    CommandHandle HandDevice::save_parameters_confirmed(std::chrono::milliseconds timeout) {
+        return impl_->enqueue_operation(DeviceOperation::kSaveParametersConfirmed, timeout,
+                                        "save_parameters_confirmed");
+    }
+    CommandHandle HandDevice::calibrate(std::chrono::milliseconds timeout) {
+        return impl_->enqueue_operation(DeviceOperation::kCalibrate, timeout, "calibrate");
+    }
 
 #undef LINKERBOT_HAND_DEFINE_OPERATION
 
@@ -907,9 +948,16 @@ namespace linkerbot::hand {
         return std::get<Sample>(impl_->read_raw(TelemetrySemantic::Semantic, timeout, #Method));                       \
     }
 
+    LINKERBOT_HAND_DEFINE_GETTER(get_torques_limits, kTorqueLimits, TorqueLimitSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_speeds, kMeasuredSpeeds, MeasuredSpeedSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_configured_speeds, kConfiguredSpeeds, ConfiguredSpeedSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_configured_accelerations, kConfiguredAccelerations, ConfiguredAccelerationSample)
+    LINKERBOT_HAND_DEFINE_GETTER(get_position_kp, kPositionKp, PositionKpSample)
+    LINKERBOT_HAND_DEFINE_GETTER(get_position_kd, kPositionKd, PositionKdSample)
+    LINKERBOT_HAND_DEFINE_GETTER(get_torque_kd, kTorqueKd, TorqueKdSample)
+    LINKERBOT_HAND_DEFINE_GETTER(get_torque_limits, kTorqueLimits, TorqueLimitSample)
+    LINKERBOT_HAND_DEFINE_GETTER(get_motion_times, kMotionTimes, MotionTimeSample)
+    LINKERBOT_HAND_DEFINE_GETTER(get_limit_compensations, kLimitCompensations, LimitCompensationSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_currents, kCurrents, CurrentSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_current_limits, kCurrentLimits, CurrentLimitSample)
     LINKERBOT_HAND_DEFINE_GETTER(get_torques, kTorques, TorqueSample)
@@ -1020,6 +1068,12 @@ namespace linkerbot::hand {
                 latest_sample = sample->meta.collected_at;
             }
         };
+        observe_sample(result.position_kp);
+        observe_sample(result.position_kd);
+        observe_sample(result.torque_kd);
+        observe_sample(result.torque_limits);
+        observe_sample(result.motion_times);
+        observe_sample(result.limit_compensations);
         observe_sample(result.angles);
         observe_sample(result.measured_speeds);
         observe_sample(result.configured_speeds);
@@ -1056,6 +1110,12 @@ namespace linkerbot::hand {
             meta.connection_generation = result.connection_generation;
             unified_detail::complete_freshness(meta, capabilities.telemetry_channel(semantic), now);
         };
+        complete_meta(result.position_kp, TelemetrySemantic::kPositionKp);
+        complete_meta(result.position_kd, TelemetrySemantic::kPositionKd);
+        complete_meta(result.torque_kd, TelemetrySemantic::kTorqueKd);
+        complete_meta(result.torque_limits, TelemetrySemantic::kTorqueLimits);
+        complete_meta(result.motion_times, TelemetrySemantic::kMotionTimes);
+        complete_meta(result.limit_compensations, TelemetrySemantic::kLimitCompensations);
         complete_meta(result.angles, TelemetrySemantic::kAngles);
         complete_meta(result.measured_speeds, TelemetrySemantic::kMeasuredSpeeds);
         complete_meta(result.configured_speeds, TelemetrySemantic::kConfiguredSpeeds);
@@ -1115,6 +1175,10 @@ namespace linkerbot::hand {
         const auto context = impl_->capture("start_polling");
         const auto &capabilities = context.capabilities;
         auto plan = requested;
+        if (plan.empty() && impl_->config_.empty_polling_plan_disables) {
+            stop_polling();
+            return;
+        }
         if (plan.empty()) {
             plan.push_back({TelemetrySemantic::kAngles, impl_->config_.polling_interval});
         }

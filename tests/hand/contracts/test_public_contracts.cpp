@@ -23,27 +23,6 @@
 using namespace linkerbot::hand;
 
 namespace {
-#define ASSERT_REMOVED_METHOD(Name)                                                                                    \
-    template <typename T, typename = void> struct Has_##Name : std::false_type {};                                     \
-    template <typename T> struct Has_##Name<T, std::void_t<decltype(&T::Name)>> : std::true_type {};                   \
-    static_assert(!Has_##Name<HandDevice>::value)
-
-    ASSERT_REMOVED_METHOD(set_torques);
-    ASSERT_REMOVED_METHOD(set_limit_compensations);
-    ASSERT_REMOVED_METHOD(get_limit_compensations);
-    ASSERT_REMOVED_METHOD(calibrate);
-    ASSERT_REMOVED_METHOD(set_motion_times);
-    ASSERT_REMOVED_METHOD(get_motion_times);
-    ASSERT_REMOVED_METHOD(set_torques_limits);
-    ASSERT_REMOVED_METHOD(get_torques_limits);
-    ASSERT_REMOVED_METHOD(set_position_kp);
-    ASSERT_REMOVED_METHOD(get_position_kp);
-    ASSERT_REMOVED_METHOD(set_position_kd);
-    ASSERT_REMOVED_METHOD(get_position_kd);
-    ASSERT_REMOVED_METHOD(set_torque_kd);
-    ASSERT_REMOVED_METHOD(get_torque_kd);
-#undef ASSERT_REMOVED_METHOD
-
 #define ASSERT_REMOVED_MEMBER(Type, Name)                                                                              \
     template <typename T, typename = void> struct Has_##Name : std::false_type {};                                     \
     template <typename T> struct Has_##Name<T, std::void_t<decltype(&T::Name)>> : std::true_type {};                   \
@@ -54,51 +33,22 @@ namespace {
     ASSERT_REMOVED_MEMBER(o30::TorqueManager, set_all_torque_limits);
     ASSERT_REMOVED_MEMBER(o30::TorqueManager, get_torque_limits);
     ASSERT_REMOVED_MEMBER(o30::TorqueManager, get_torque_limit_snapshot);
-    ASSERT_REMOVED_MEMBER(HandSnapshot, torque_limits);
-    ASSERT_REMOVED_MEMBER(HandSnapshot, motion_times);
     ASSERT_REMOVED_MEMBER(JointState, torque_limit_raw);
     ASSERT_REMOVED_MEMBER(JointState, motion_time_raw);
     ASSERT_REMOVED_MEMBER(o30::Snapshot, torque_limit);
     ASSERT_REMOVED_MEMBER(o30::Snapshot, motion_time);
-    ASSERT_REMOVED_MEMBER(HandSnapshot, position_kp);
-    ASSERT_REMOVED_MEMBER(HandSnapshot, position_kd);
-    ASSERT_REMOVED_MEMBER(HandSnapshot, torque_kd);
-    ASSERT_REMOVED_MEMBER(JointState, position_kp_raw);
-    ASSERT_REMOVED_MEMBER(JointState, position_kd_raw);
-    ASSERT_REMOVED_MEMBER(JointState, torque_kd_raw);
+    template <typename T, typename = void> struct Has_position_kp : std::false_type {};
+    template <typename T> struct Has_position_kp<T, std::void_t<decltype(&T::position_kp)>> : std::true_type {};
+    template <typename T, typename = void> struct Has_position_kd : std::false_type {};
+    template <typename T> struct Has_position_kd<T, std::void_t<decltype(&T::position_kd)>> : std::true_type {};
+    template <typename T, typename = void> struct Has_torque_kd : std::false_type {};
+    template <typename T> struct Has_torque_kd<T, std::void_t<decltype(&T::torque_kd)>> : std::true_type {};
     static_assert(Has_position_kp<l6::L6>::value && Has_position_kp<l6::Snapshot>::value);
     static_assert(Has_position_kd<l6::L6>::value && Has_position_kd<l6::Snapshot>::value);
     static_assert(Has_torque_kd<l6::L6>::value && Has_torque_kd<l6::Snapshot>::value);
 #undef ASSERT_REMOVED_MEMBER
 
-#define ASSERT_REMOVED_ENUM(Type, Name)                                                                                \
-    template <typename T, typename = void> struct Has_##Name : std::false_type {};                                     \
-    template <typename T> struct Has_##Name<T, std::void_t<decltype(T::Name)>> : std::true_type {};                    \
-    static_assert(!Has_##Name<Type>::value)
-
-    ASSERT_REMOVED_ENUM(CommandSemantic, kTorqueLimits);
-    static_assert(!Has_kTorqueLimits<TelemetrySemantic>::value);
-    ASSERT_REMOVED_ENUM(CommandSemantic, kMotionTimes);
-    static_assert(!Has_kMotionTimes<TelemetrySemantic>::value);
-    ASSERT_REMOVED_ENUM(CommandFamily, kTorqueLimit);
-    static_assert(!Has_kTorqueLimit<o30::SensorSource>::value);
-    ASSERT_REMOVED_ENUM(CommandFamily, kMotionTimeSetting);
-    ASSERT_REMOVED_ENUM(o30::SensorSource, kMotionTime);
-    ASSERT_REMOVED_ENUM(CommandSemantic, kPositionKp);
-    ASSERT_REMOVED_ENUM(CommandSemantic, kPositionKd);
-    ASSERT_REMOVED_ENUM(CommandSemantic, kTorqueKd);
-    static_assert(!Has_kPositionKp<TelemetrySemantic>::value);
-    static_assert(!Has_kPositionKd<TelemetrySemantic>::value);
-    static_assert(!Has_kTorqueKd<TelemetrySemantic>::value);
-    ASSERT_REMOVED_ENUM(CommandFamily, kControlGain);
-#undef ASSERT_REMOVED_ENUM
-
-    template <typename T, typename = void> struct HasCalibrationManager : std::false_type {};
-    template <typename T> struct HasCalibrationManager<T, std::void_t<decltype(&T::calibration)>> : std::true_type {};
-    static_assert(!HasCalibrationManager<l30::L30>::value);
-    static_assert(!Has_calibrate<OperationCapabilities>::value);
-
-    // Removed enum values remain unused; surviving values must not shift.
+    // Existing public numeric values must not shift.
     static_assert(static_cast<uint8_t>(CommandSemantic::kCurrentLimits) == 3);
     static_assert(static_cast<uint8_t>(TelemetrySemantic::kCurrentLimits) == 8);
     static_assert(static_cast<uint8_t>(CommandFamily::kCurrentLimit) == 3);
@@ -115,16 +65,12 @@ namespace {
     static_assert(static_cast<uint8_t>(DeviceOperation::kSaveParameters) == 5);
 }
 
-TEST_CASE("removed unified L6 gain IDs are unsupported on every model", "[comm][contract][capabilities]") {
+TEST_CASE("unified L6 gain IDs are model scoped", "[comm][contract][capabilities]") {
     for (const auto model : supported_models()) {
-        for (const auto side : {HandSide::kLeft, HandSide::kRight}) {
-            const auto &caps = declared_capabilities(model, side);
-            for (const auto id : {4, 5, 6}) {
-                REQUIRE_FALSE(caps.supports(static_cast<CommandSemantic>(id)));
-            }
-            for (const auto id : {5, 6, 7}) {
-                REQUIRE_FALSE(caps.supports(static_cast<TelemetrySemantic>(id)));
-            }
+        const auto &caps = declared_capabilities(model, HandSide::kLeft);
+        for (const auto semantic :
+             {CommandSemantic::kPositionKp, CommandSemantic::kPositionKd, CommandSemantic::kTorqueKd}) {
+            REQUIRE(caps.supports(semantic) == (model == Model::kL6));
         }
     }
 }

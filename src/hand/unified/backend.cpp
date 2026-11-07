@@ -1,4 +1,5 @@
 #include "detail/backend.hpp"
+#include "detail/o30_v25.hpp"
 
 #include "detail/command_handle_access.hpp"
 #include "detail/execution_gate.hpp"
@@ -33,6 +34,18 @@ namespace linkerbot::hand::unified_detail {
                 return CommandFamily::kAccelerationSetting;
             case CommandSemantic::kCurrentLimits:
                 return CommandFamily::kCurrentLimit;
+            case CommandSemantic::kPositionKp:
+            case CommandSemantic::kPositionKd:
+            case CommandSemantic::kTorqueKd:
+                return CommandFamily::kControlGain;
+            case CommandSemantic::kTorqueLimits:
+                return CommandFamily::kTorqueLimit;
+            case CommandSemantic::kTorques:
+                return CommandFamily::kTorqueTarget;
+            case CommandSemantic::kMotionTimes:
+                return CommandFamily::kMotionTime;
+            case CommandSemantic::kLimitCompensations:
+                return CommandFamily::kLimitCompensation;
             case CommandSemantic::kStallDetectionTimes:
             case CommandSemantic::kStallThresholds:
             case CommandSemantic::kStallHoldCurrents:
@@ -54,10 +67,10 @@ namespace linkerbot::hand::unified_detail {
 
         template <typename Device, size_t JointCount> class ModelBackend final : public DeviceBackend {
         public:
-            explicit ModelBackend(std::unique_ptr<Device> device,
-                                  std::shared_ptr<transport::Session> owned_session = {})
-                : device_(std::move(device)), owned_session_(std::move(owned_session)),
-                  execution_gate_(std::make_shared<ExecutionGate>()) {
+            explicit ModelBackend(std::unique_ptr<Device> device, std::shared_ptr<transport::Session> owned_session,
+                                  const HandDeviceConfig &config)
+                : config_(config), capabilities_(declared_capabilities(config)), device_(std::move(device)),
+                  owned_session_(std::move(owned_session)), execution_gate_(std::make_shared<ExecutionGate>()) {
                 RuntimeAccess::set_polling_gate(*device_->runtime(),
                                                 [gate = execution_gate_](runtime::CancellationToken token) {
                                                     return gate->acquire(false, runtime::Deadline::max(), token);
@@ -65,18 +78,24 @@ namespace linkerbot::hand::unified_detail {
             }
 
             [[nodiscard]] CommandHandle submit(const CommandRequest &request) override {
-                const auto *capability = device_->capabilities().command(request.semantic);
-                if (!capability) {
-                    throw UnsupportedOperationError("command semantic is not supported by this device");
+                const auto *capability = capabilities_.command(request.semantic);
+                if (request.operation ? !capabilities_.supports(*request.operation) : !capability) {
+                    throw UnsupportedOperationError("command or operation is not supported by this device");
                 }
                 if (request.timeout.count() <= 0) {
                     throw ValidationError("command timeout must be positive");
                 }
-                static_cast<void>(validate_command_values(request.raw_values, *capability));
+                if (!request.operation) {
+                    static_cast<void>(validate_command_values(request.raw_values, *capability));
+                }
 
-                auto handle = request.completion ? *request.completion
-                                                 : CommandHandle{next_command_id(), command_family(request.semantic),
-                                                                 capability->ack_support, request.ack_expectation};
+                auto handle = request.completion
+                                  ? *request.completion
+                                  : CommandHandle{next_command_id(),
+                                                  request.operation ? CommandFamily::kDiscreteOperation
+                                                                    : command_family(request.semantic),
+                                                  request.operation ? AckSupport::kRequired : capability->ack_support,
+                                                  request.ack_expectation};
                 const auto deadline = request.deadline ? *request.deadline : runtime::deadline_after(request.timeout);
                 auto lease = execution_gate_->acquire(true, deadline, request.cancellation, request.generation_valid);
                 if (request.generation_valid && !request.generation_valid()) {
@@ -112,8 +131,17 @@ namespace linkerbot::hand::unified_detail {
                 // O30 writes the three safe mounted ranges sequentially, each
                 // with its own ACK. Dispatch means the last range was sent;
                 // earlier receipts (including a revision query) still count.
-                auto final_send = [](const runtime::TransactionPlan &plan) {
+                auto final_send = [this, operation = request.operation](const runtime::TransactionPlan &plan) {
+                    if constexpr (std::is_same_v<Device, l30::L30>) {
+                        if (operation == DeviceOperation::kCalibrate) {
+                            return !plan.frames.empty() && ((plan.frames.back().id >> 21U) & 0xFU) == 3U &&
+                                   ((plan.frames.back().id >> 13U) & 0xFFU) == 5U;
+                        }
+                    }
                     if constexpr (std::is_same_v<Device, o30::O30>) {
+                        if (config_.o30_layout == O30Layout::kPythonV25) {
+                            return true;
+                        }
                         return !plan.command_family.empty() && !plan.frames.empty() &&
                                plan.frames.back().data[1] == o30::kSafeWriteSegments.back().si;
                     }
@@ -130,7 +158,19 @@ namespace linkerbot::hand::unified_detail {
                     RuntimeAccess::execute_command(
                         *device_->runtime(), deadline, request.ack_expectation == AckExpectation::kNone,
                         std::move(observe), std::move(final_send), request.cancellation,
-                        [&] { outcome = submit_command(*device_, bounded); },
+                        [&] {
+                            if (request.operation) {
+                                outcome = operate_device(*device_, *request.operation, bounded.timeout);
+                                return;
+                            }
+                            if constexpr (std::is_same_v<Device, o30::O30>) {
+                                if (config_.o30_layout == O30Layout::kPythonV25) {
+                                    outcome = submit_v25(*device_, bounded);
+                                    return;
+                                }
+                            }
+                            outcome = submit_command(*device_, bounded);
+                        },
                         [handle]() mutable { command_detail::CommandHandleAccess::reserve_send_result(handle); });
                 } catch (...) {
                     deactivate();
@@ -159,11 +199,17 @@ namespace linkerbot::hand::unified_detail {
             }
 
             [[nodiscard]] TelemetrySample read(TelemetrySemantic semantic, std::chrono::milliseconds timeout) override {
-                if (!device_->capabilities().supports(semantic)) {
+                if (!capabilities_.supports(semantic)) {
                     throw UnsupportedOperationError("telemetry semantic is not supported by this device");
                 }
                 const auto deadline = runtime::deadline_after(timeout);
                 auto lease = execution_gate_->acquire(false, deadline);
+                if constexpr (std::is_same_v<Device, o30::O30>) {
+                    if (config_.o30_layout == O30Layout::kPythonV25 && semantic != TelemetrySemantic::kForce &&
+                        semantic != TelemetrySemantic::kForceFns) {
+                        return read_v25(*device_, semantic, runtime::remaining(deadline), capabilities_);
+                    }
+                }
                 return read_telemetry(*device_, semantic, runtime::remaining(deadline));
             }
 
@@ -171,13 +217,13 @@ namespace linkerbot::hand::unified_detail {
                 if (timeout.count() <= 0) {
                     throw ValidationError("operation timeout must be positive");
                 }
-                if (!device_->capabilities().supports(operation)) {
+                if (!capabilities_.supports(operation)) {
                     throw UnsupportedOperationError("device operation is not supported by this device");
                 }
                 if (operation == DeviceOperation::kReadDeviceInfo) {
                     throw UnsupportedOperationError("read-device-info returns identity; use verify_identity");
                 }
-                const auto acknowledged = device_->capabilities().operations.acknowledged(operation);
+                const auto acknowledged = capabilities_.operations.acknowledged(operation);
                 CommandHandle handle{next_command_id(), CommandFamily::kDiscreteOperation,
                                      acknowledged ? AckSupport::kRequired : AckSupport::kUnsupported,
                                      acknowledged ? AckExpectation::kRequired : AckExpectation::kNone};
@@ -198,6 +244,10 @@ namespace linkerbot::hand::unified_detail {
                                                 const DeviceCapabilities &capabilities) const override {
                 auto result = unified_snapshot(device_->get_snapshot(), model, side, capabilities);
                 if constexpr (std::is_same_v<Device, o30::O30>) {
+                    if (config_.o30_layout == O30Layout::kPythonV25) {
+                        project_v25(*device_, result, capabilities);
+                        return result;
+                    }
                     const auto feedback = [&](auto &sample, const char *domain) {
                         if (!sample) {
                             return;
@@ -221,10 +271,10 @@ namespace linkerbot::hand::unified_detail {
 
             [[nodiscard]] HandHealth health() const override {
                 auto health = device_->health();
-                auto current = unified_snapshot(device_->get_snapshot(), Model::kUnknown, HandSide::kUnknown,
-                                                device_->capabilities());
+                auto current =
+                    unified_snapshot(device_->get_snapshot(), Model::kUnknown, HandSide::kUnknown, capabilities_);
                 const auto now = HealthClock::now();
-                const auto &capabilities = device_->capabilities();
+                const auto &capabilities = capabilities_;
                 const auto update = [&](auto &sample, TelemetrySemantic semantic, const char *name) {
                     if (!sample) {
                         return;
@@ -251,7 +301,29 @@ namespace linkerbot::hand::unified_detail {
                 return read_identity(*device_, side, timeout);
             }
 
-            void start_polling(const PollingPlan &plan) override { start_device_polling(*device_, plan); }
+            void start_polling(const PollingPlan &plan) override {
+                if constexpr (std::is_same_v<Device, o30::O30>) {
+                    if (config_.o30_layout == O30Layout::kPythonV25) {
+                        std::vector<runtime::DeviceRuntime::PollTask> tasks;
+                        for (const auto &channel : plan) {
+                            runtime::DeviceRuntime::PollTask task;
+                            task.name = "v25/" + std::to_string(static_cast<unsigned>(channel.semantic));
+                            task.period = channel.interval;
+                            task.run = [this, semantic = channel.semantic](runtime::CancellationToken) {
+                                if (semantic == TelemetrySemantic::kForce || semantic == TelemetrySemantic::kForceFns) {
+                                    (void)read_telemetry(*device_, semantic, std::chrono::milliseconds{1000});
+                                } else {
+                                    (void)read_v25(*device_, semantic, std::chrono::milliseconds{100}, capabilities_);
+                                }
+                            };
+                            tasks.push_back(std::move(task));
+                        }
+                        device_->runtime()->start_polling(std::move(tasks));
+                        return;
+                    }
+                }
+                start_device_polling(*device_, plan);
+            }
 
             void assert_external_lifecycle() const override { device_->runtime()->assert_external_lifecycle(); }
             void cancel_commands() override { device_->runtime()->cancel_all(); }
@@ -279,6 +351,8 @@ namespace linkerbot::hand::unified_detail {
             }
 
         private:
+            HandDeviceConfig config_;
+            DeviceCapabilities capabilities_;
             std::unique_ptr<Device> device_;
             std::shared_ptr<transport::Session> owned_session_;
             std::shared_ptr<ExecutionGate> execution_gate_;
@@ -286,8 +360,10 @@ namespace linkerbot::hand::unified_detail {
 
         template <typename Device, size_t JointCount>
         [[nodiscard]] std::unique_ptr<DeviceBackend> backend(std::unique_ptr<Device> device,
-                                                             std::shared_ptr<transport::Session> owned_session = {}) {
-            return std::make_unique<ModelBackend<Device, JointCount>>(std::move(device), std::move(owned_session));
+                                                             std::shared_ptr<transport::Session> owned_session,
+                                                             const HandDeviceConfig &config) {
+            return std::make_unique<ModelBackend<Device, JointCount>>(std::move(device), std::move(owned_session),
+                                                                      config);
         }
 
         template <typename Side> [[nodiscard]] Side concrete_side(HandSide side) {
@@ -329,19 +405,19 @@ namespace linkerbot::hand::unified_detail {
             if (config.l6_protocol == L6Protocol::kHopV004) {
                 auto hand =
                     std::make_unique<l6::HopL6>(side, session, config.address.value_or(l6::hop::kDefaultRequestId));
-                return backend<l6::HopL6, l6::kJointCount>(std::move(hand), std::move(owned_session));
+                return backend<l6::HopL6, l6::kJointCount>(std::move(hand), std::move(owned_session), config);
             }
             auto hand = injected
                             ? std::make_unique<l6::L6>(side, session, config.interface_name, config.angle_mapping_path)
                             : std::make_unique<l6::L6>(side, config.interface_name, config.angle_mapping_path);
-            return backend<l6::L6, l6::kJointCount>(std::move(hand), std::move(owned_session));
+            return backend<l6::L6, l6::kJointCount>(std::move(hand), std::move(owned_session), config);
         }
         case Model::kO6: {
             const auto side = concrete_side<o6::Side>(config.side);
             auto hand = injected
                             ? std::make_unique<o6::O6>(side, session, config.interface_name, config.angle_mapping_path)
                             : std::make_unique<o6::O6>(side, config.interface_name, config.angle_mapping_path);
-            return backend<o6::O6, o6::kJointCount>(std::move(hand), std::move(owned_session));
+            return backend<o6::O6, o6::kJointCount>(std::move(hand), std::move(owned_session), config);
         }
         case Model::kL20Lite: {
             const auto side = concrete_side<l20lite::Side>(config.side);
@@ -349,14 +425,14 @@ namespace linkerbot::hand::unified_detail {
                 injected ? std::make_unique<l20lite::L20lite>(side, session, config.interface_name,
                                                               config.angle_mapping_path)
                          : std::make_unique<l20lite::L20lite>(side, config.interface_name, config.angle_mapping_path);
-            return backend<l20lite::L20lite, l20lite::kJointCount>(std::move(hand), std::move(owned_session));
+            return backend<l20lite::L20lite, l20lite::kJointCount>(std::move(hand), std::move(owned_session), config);
         }
         case Model::kL20: {
             const auto side = concrete_side<l20::Side>(config.side);
             auto hand =
                 injected ? std::make_unique<l20::L20>(side, session, config.interface_name, config.angle_mapping_path)
                          : std::make_unique<l20::L20>(side, config.interface_name, config.angle_mapping_path);
-            return backend<l20::L20, l20::kJointCount>(std::move(hand), std::move(owned_session));
+            return backend<l20::L20, l20::kJointCount>(std::move(hand), std::move(owned_session), config);
         }
         case Model::kL30: {
             const auto node_id = static_cast<uint8_t>(config.address.value_or(l30::kDefaultNodeId));
@@ -365,13 +441,15 @@ namespace linkerbot::hand::unified_detail {
                             ? std::make_unique<l30::L30>(session, node_id, host_id, config.auto_start_periodic_reports)
                             : std::make_unique<l30::L30>(config.interface_name, node_id, host_id,
                                                          config.auto_start_periodic_reports);
-            return backend<l30::L30, l30::kJointCount>(std::move(hand), std::move(owned_session));
+            return backend<l30::L30, l30::kJointCount>(std::move(hand), std::move(owned_session), config);
         }
         case Model::kO30: {
-            const auto request_id = config.address.value_or(o30::protocol::kDefaultRequestId);
+            const auto request_id = config.o30_layout == O30Layout::kPythonV25
+                                        ? config.address.value_or(config.side == HandSide::kLeft ? 2U : 1U)
+                                        : config.address.value_or(o30::protocol::kDefaultRequestId);
             auto hand = injected ? std::make_unique<o30::O30>(session, request_id)
                                  : std::make_unique<o30::O30>(config.interface_name, request_id);
-            return backend<o30::O30, o30::kJointCount>(std::move(hand), std::move(owned_session));
+            return backend<o30::O30, o30::kJointCount>(std::move(hand), std::move(owned_session), config);
         }
         case Model::kUnknown:
             break;

@@ -1,5 +1,18 @@
 # Release notes
 
+## 0.3.4
+
+- Add unified L6 position Kp/Kd, torque Kd, torque-output and limit-compensation commands and samples. Keep returned configuration bytes rather than substituting requested values. Torque output uses FIFO and bounded mode-transition guards derived from the Python reference.
+- Add asynchronous `save_parameters_confirmed()` for Classic L6/O6. Require the explicit `CF 01` reply. Keep the existing `save_parameters()` behavior unchanged.
+- Add L30 calibration as an ACK-gated disable, unlock and calibrate sequence. A failed stage prevents later writes; calibration does not re-enable the hand.
+- Add an explicit O30 Python V25 layout for compact whole-hand commands and telemetry, including torque limits and motion time. Keep the default mounted V36 path and native Managers unchanged. Require complete response coverage and distinguish configuration queries from write ACKs.
+- Add an explicit empty-polling-plan disable option, propagated through discovery. Keep existing no-argument polling defaults.
+- Add same-input outgoing-frame vectors from Python SDK commit `3a63e723b9a0046e9a60a58339b9f064ef5b70fd`, FakeTransport failure-boundary regressions and installed-consumer coverage. Record remaining migration requirements in the Python behavior baseline guide. O20 and Python hand/arm integration are not included.
+
+The minimum transport dependency and bundled baseline remain v0.3.4 (`0e190032d65ed0b315337b45b3779cf4f650ed68`). Rebuild the SDK and every downstream consumer with matching headers and libraries. New public struct fields and variant alternatives do not preserve binary compatibility with older builds. Existing C++ method signatures, enum values and default protocol paths remain available.
+
+Verification uses native builds, offline regressions, package consumers, sanitizers and static analysis. This release does not add physical-device acceptance. Persistence, calibration, torque-mode transitions, V25 behavior, deployment adapter/driver/firmware combinations and long-duration multi-device operation remain subject to hardware validation. Existing hardware records retain their original scope. The added interfaces do not establish complete Python behavioral equivalence or Python binding safety.
+
 ## 0.3.3
 
 - Require transport 0.3.4 or newer in the 0.3 minor line for source builds, parent-provided targets, prebuilt selection and installed CMake consumers. Keep the version floor in one CMake definition, independent of the hand patch version. Existing same-minor compatibility and the requirement not to use a transport patch older than hand are retained.

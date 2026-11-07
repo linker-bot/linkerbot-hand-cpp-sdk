@@ -102,10 +102,44 @@ namespace linkerbot::hand {
         [[nodiscard]] CommandHandle set_stall_thresholds(const std::vector<double> &values);
         [[nodiscard]] CommandHandle set_stall_hold_currents(const std::vector<double> &values);
 
+        [[nodiscard]] CommandHandle set_position_kp(const std::vector<double> &values);
+        [[nodiscard]] PositionKpSample get_position_kp(std::chrono::milliseconds timeout = std::chrono::milliseconds{
+                                                           100});
+
+        [[nodiscard]] CommandHandle set_position_kd(const std::vector<double> &values);
+        [[nodiscard]] PositionKdSample get_position_kd(std::chrono::milliseconds timeout = std::chrono::milliseconds{
+                                                           100});
+
+        [[nodiscard]] CommandHandle set_torque_kd(const std::vector<double> &values);
+        [[nodiscard]] TorqueKdSample get_torque_kd(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+
+        [[nodiscard]] CommandHandle set_torque_limits(const std::vector<double> &values);
+        [[nodiscard]] TorqueLimitSample get_torque_limits(std::chrono::milliseconds timeout = std::chrono::milliseconds{
+                                                              100});
+
+        [[nodiscard]] CommandHandle set_motion_times(const std::vector<double> &values);
+        [[nodiscard]] MotionTimeSample get_motion_times(std::chrono::milliseconds timeout = std::chrono::milliseconds{
+                                                            100});
+
+        [[nodiscard]] CommandHandle set_limit_compensations(const std::vector<double> &values);
+        [[nodiscard]] LimitCompensationSample
+        get_limit_compensations(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
+
         [[nodiscard]] CommandHandle clear_faults();
         [[nodiscard]] CommandHandle enable();
         [[nodiscard]] CommandHandle disable();
         [[nodiscard]] CommandHandle save_parameters();
+        // Explicit ACK-gated persistence; legacy save_parameters() remains send-only.
+        [[nodiscard]] CommandHandle
+        save_parameters_confirmed(std::chrono::milliseconds timeout = std::chrono::milliseconds{200});
+        // L30: disable, unlock and calibrate, each gated by its device ACK.
+        [[nodiscard]] CommandHandle calibrate(std::chrono::milliseconds timeout = std::chrono::milliseconds{300});
+        [[nodiscard]] CommandHandle set_torques(const std::vector<double> &values,
+                                                std::chrono::milliseconds timeout = std::chrono::milliseconds{300});
+        // Python spelling retained as an alias for torque limits.
+        [[nodiscard]] CommandHandle set_torques_limits(const std::vector<double> &values);
+        [[nodiscard]] TorqueLimitSample
+        get_torques_limits(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
 
         [[nodiscard]] AngleSample get_angles(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
         [[nodiscard]] MeasuredSpeedSample get_speeds(std::chrono::milliseconds timeout = std::chrono::milliseconds{

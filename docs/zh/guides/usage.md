@@ -240,18 +240,11 @@ Manager 成员存在不代表当前固件支持其所有操作。统一接口检
 
 这些入口的 getter 可能主动读取，也可能读取写回复或已发送目标缓存；查看样本的
 `meta.origin`、`meta.valid`、`meta.stale` 和[型号差异](#型号差异)。
-O30 已移除运动时间和扭矩上限的统一接口、型号 Manager 接口及相关样本、事件和快照字段。
-旧调用须移除并重新编译；实际扭矩读取和电流上限读写继续提供。
-统一接口已移除 `set_torques()`、`set_limit_compensations()` 和 `get_limit_compensations()`；
-原有 L6 调用迁移到下表的型号 Manager；统一接口继续提供扭矩读取。
-L6 的位置 Kp、位置 Kd、扭矩 Kd 已完整移出统一接口，包括读写方法、能力表、样本类型、
-关节状态、快照字段和统一事件。调用方须改用 `l6::L6` 的专有 Manager 并重新编译。
-
-| 原 `HandDevice` 入口 | 专有 Manager 写入 | 专有 Manager 读取 |
-| --- | --- | --- |
-| `set_position_kp()` / `get_position_kp()` | `position_kp.set_values()` | `position_kp.get_blocking()` / `get_snapshot()` |
-| `set_position_kd()` / `get_position_kd()` | `position_kd.set_values()` | `position_kd.get_blocking()` / `get_snapshot()` |
-| `set_torque_kd()` / `get_torque_kd()` | `torque_kd.set_values()` | `torque_kd.get_blocking()` / `get_snapshot()` |
+L6 增益、扭矩输出和限位补偿现已通过统一接口提供。
+O30 扭矩限制和运动时间方法须显式选择 `O30Layout::kPythonV25`；原生 Manager 保持挂载 V36 布局。
+Classic L6/O6 使用 `save_parameters_confirmed()` 等待持久化 ACK；`save_parameters()` 保留原语义。
+L30 `calibrate()` 按 ACK 执行失能、解锁、校准，不自动重新使能。
+时序、兼容性和实机范围见 [Python 行为基准](python-behavior-baseline.md)。升级后重新编译全部消费者。
 
 ### 通过 Manager 使用专有功能
 

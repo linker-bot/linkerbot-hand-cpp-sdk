@@ -91,6 +91,18 @@ namespace linkerbot::hand::unified_detail {
     TelemetrySample read_telemetry(l6::L6 &device, TelemetrySemantic semantic, std::chrono::milliseconds timeout) {
         require_timeout(timeout);
         switch (semantic) {
+        case TelemetrySemantic::kPositionKp:
+            static_cast<void>(device.position_kp.get_blocking(timeout));
+            break;
+        case TelemetrySemantic::kPositionKd:
+            static_cast<void>(device.position_kd.get_blocking(timeout));
+            break;
+        case TelemetrySemantic::kTorqueKd:
+            static_cast<void>(device.torque_kd.get_blocking(timeout));
+            break;
+        case TelemetrySemantic::kLimitCompensations:
+            static_cast<void>(device.limit_compensation.get_blocking(timeout));
+            break;
         case TelemetrySemantic::kAngles:
             return angle_sample(device.angle.get_blocking(timeout), device.capabilities());
         case TelemetrySemantic::kConfiguredSpeeds:

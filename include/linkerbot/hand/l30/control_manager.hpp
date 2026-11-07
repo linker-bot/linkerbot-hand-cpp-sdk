@@ -24,6 +24,10 @@ namespace linkerbot::hand::l30 {
 
         void disable(std::chrono::milliseconds timeout_ms = std::chrono::milliseconds{100});
 
+        // Disable -> unlock -> calibrate. Failure never advances the chain.
+        // One total timeout bounds all three ACK-gated steps.
+        void calibrate(std::chrono::milliseconds timeout_ms = std::chrono::milliseconds{100});
+
     private:
         Client *client_;
     };

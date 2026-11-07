@@ -24,6 +24,8 @@ namespace linkerbot::hand::capabilities_detail {
             profile.transport = classic_can_transport(side);
             profile.operations.read_device_info = true;
             profile.operations.save_parameters = true;
+            profile.operations.save_parameters_confirmed = true;
+            profile.operations.acknowledged_operations = {DeviceOperation::kSaveParametersConfirmed};
             profile.joints = joints;
             profile.commands = {
                 angle_command(joints, "u8", AckSupport::kUnsupported, true),

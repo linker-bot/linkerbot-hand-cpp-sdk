@@ -34,6 +34,13 @@ namespace {
     static_assert(                                                                                                     \
         std::is_same_v<decltype(std::declval<HandDevice &>().name(std::declval<const std::vector<double> &>())),       \
                        CommandHandle>)
+    LINKERBOT_ASSERT_SETTER(set_position_kp);
+    LINKERBOT_ASSERT_SETTER(set_position_kd);
+    LINKERBOT_ASSERT_SETTER(set_torque_kd);
+    LINKERBOT_ASSERT_SETTER(set_torques);
+    LINKERBOT_ASSERT_SETTER(set_limit_compensations);
+    LINKERBOT_ASSERT_SETTER(set_torques_limits);
+    LINKERBOT_ASSERT_SETTER(set_motion_times);
     LINKERBOT_ASSERT_SETTER(set_speeds);
     LINKERBOT_ASSERT_SETTER(set_accelerations);
     LINKERBOT_ASSERT_SETTER(set_current_limits);
@@ -61,6 +68,22 @@ namespace {
         validation::require(handle.stage() == linkerbot::hand::CommandStage::kDispatched,
                             "installed no-ACK command has wrong terminal stage");
         validation::complete(device.hand.set_stall_thresholds(std::vector<double>(6, 10)));
+        validation::complete(device.hand.set_position_kp(std::vector<double>(6, 50)));
+        validation::require(device.hand.get_snapshot().position_kp.has_value(), "installed gain snapshot missing");
+        device.transport->on_request(0x28, [](const auto &request) {
+            if (request.data[0] == 0xCF) {
+                auto reply = request;
+                reply.dlc = 2;
+                reply.data[1] = 1;
+                return std::vector<linkerbot::can::Message>{reply};
+            }
+            return validation::l6_reply(request);
+        });
+        const auto saved = device.hand.save_parameters_confirmed();
+        validation::complete(saved);
+        validation::require(saved.stage() == linkerbot::hand::CommandStage::kAcknowledged &&
+                                saved.send_results().size() == 1,
+                            "installed confirmed-save contract failed");
 
         const auto before = device.transport->sent().size();
         bool rejected = false;

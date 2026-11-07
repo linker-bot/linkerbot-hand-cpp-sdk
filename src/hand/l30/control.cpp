@@ -28,4 +28,14 @@ namespace linkerbot::hand::l30 {
         send_control_write(*client_, protocol::kSubDisable, timeout_ms);
     }
 
+    void ControlManager::calibrate(std::chrono::milliseconds timeout_ms) {
+        auto operation = client_->operation(timeout_ms);
+        send_control_write(*client_, protocol::kSubDisable, operation.remaining());
+        const auto unlock = client_->request_ack(protocol::kParentConfig, protocol::kSubConfigUnlock,
+                                                 {6, 0, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC}, 12, operation.remaining());
+        protocol::check_response_status(unlock.data(), unlock.size());
+        const auto response = client_->request_ack(protocol::kParentConfig, 0x05, protocol::empty_request_payload(),
+                                                   protocol::kEmptyRequestBytes, operation.remaining());
+        protocol::check_response_status(response.data(), response.size());
+    }
 } // namespace linkerbot::hand::l30

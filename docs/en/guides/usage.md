@@ -240,18 +240,13 @@ The unified API checks device capabilities; numeric setters also return `Command
 
 These getters may actively query the device, read write-response caches, or read sent-target caches. Inspect sample fields
 `meta.origin`, `meta.valid`, and `meta.stale`, and see [Model differences](#model-differences).
-The O30 motion-time and torque-limit unified APIs, model Manager APIs, samples, events, and snapshot fields have been removed.
-Remove old calls and rebuild; actual torque reads and current-limit reads/writes remain available.
-The unified API has removed `set_torques()`, `set_limit_compensations()`, and `get_limit_compensations()`;
-Migrate existing L6 calls to the model Managers below; torque reads remain in the unified API.
-L6 position Kp, position Kd, and torque Kd have been fully removed from the unified API, including read/write methods, capabilities, sample types,
-joint state, snapshot fields, and unified events. Callers must migrate to native `l6::L6` Managers and rebuild.
-
-| Former `HandDevice` entry point | Native Manager write | Native Manager read |
-| --- | --- | --- |
-| `set_position_kp()` / `get_position_kp()` | `position_kp.set_values()` | `position_kp.get_blocking()` / `get_snapshot()` |
-| `set_position_kd()` / `get_position_kd()` | `position_kd.set_values()` | `position_kd.get_blocking()` / `get_snapshot()` |
-| `set_torque_kd()` / `get_torque_kd()` | `torque_kd.set_values()` | `torque_kd.get_blocking()` / `get_snapshot()` |
+L6 gains, torque output and limit compensation are available through the unified API.
+O30 torque-limit and motion-time methods require explicit `O30Layout::kPythonV25`;
+native Managers retain their mounted V36 layout. Use `save_parameters_confirmed()`
+for Classic L6/O6 persistence ACKs; `save_parameters()` retains its earlier semantics.
+L30 `calibrate()` is an ACK-gated disable/unlock/calibrate sequence and never re-enables motion.
+See [Python behavior baseline](python-behavior-baseline.md) for timing, compatibility
+and hardware-validation boundaries. Rebuild all consumers after updating.
 
 ### Using model-specific features through Managers
 

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include <linkerbot/hand/errors.hpp>
@@ -106,6 +107,33 @@ namespace linkerbot::hand::unified_detail {
                 request);
         }
 
+        template <typename Device> CommandOutcome confirmed_save(Device &device, std::chrono::milliseconds timeout) {
+            const auto id = required_request_id(device.capabilities());
+            protocol::TransactionPlan plan;
+            can::Message frame{};
+            frame.id = id;
+            frame.dlc = 8;
+            std::fill_n(frame.data.begin(), 8, uint8_t{0xCF});
+            plan.frames = {frame};
+            plan.domain = "config.save_confirmed";
+            plan.keys = {"config.save"};
+            plan.command_family = "discrete_operations";
+            plan.late_guard = std::chrono::milliseconds{20};
+            plan.poison_on_timeout = false;
+            plan.consume = [id](const can::Message &message) {
+                if (message.id != id || message.is_fd || message.is_extended || message.dlc == 0 ||
+                    message.data[0] != 0xCF) {
+                    return protocol::Progress::unmatched();
+                }
+                if (message.dlc != 2 || message.data[1] != 1) {
+                    throw ProtocolError("save-parameters response was not CF 01");
+                }
+                return protocol::Progress::complete(true);
+            };
+            (void)device.runtime()->execute(std::move(plan), runtime::deadline_after(timeout));
+            return {1, true};
+        }
+
         void require_timeout(const CommandRequest &request) {
             if (request.timeout.count() <= 0) {
                 throw ValidationError("command timeout must be positive");
@@ -165,6 +193,47 @@ namespace linkerbot::hand::unified_detail {
     CommandOutcome submit_command(l6::L6 &device, const CommandRequest &request) {
         require_timeout(request);
         switch (request.semantic) {
+        case CommandSemantic::kPositionKp:
+            device.position_kp.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
+            return {1, true};
+        case CommandSemantic::kPositionKd:
+            device.position_kd.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
+            return {1, true};
+        case CommandSemantic::kTorqueKd:
+            device.torque_kd.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
+            return {1, true};
+        case CommandSemantic::kLimitCompensations:
+            device.limit_compensation.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
+            return {1, true};
+        case CommandSemantic::kTorques: {
+            const auto id = required_request_id(device.capabilities());
+            const auto raw = fixed_values<uint8_t, l6::kJointCount>(request);
+            auto plan = with_response(l6::protocol::command(id, l6::kTorqueOpcode, {raw.begin(), raw.end()}),
+                                      l6::protocol::read_telemetry(id, l6::kTorqueOpcode));
+            plan.initial_delay = std::chrono::milliseconds{20};
+            const auto outcome = acknowledged_write(device, std::move(plan), request);
+            const auto settle = std::find(raw.begin(), raw.end(), 0) != raw.end() ? std::chrono::milliseconds{150}
+                                                                                  : std::chrono::milliseconds{20};
+            auto dispatched_at = runtime::Clock::now();
+            if (request.completion) {
+                const auto receipts = request.completion->send_results();
+                if (!receipts.empty() && receipts.back().completed_at) {
+                    dispatched_at = *receipts.back().completed_at;
+                }
+            }
+            const auto until = dispatched_at + settle;
+            while (runtime::Clock::now() < until) {
+                request.cancellation.throw_if_cancelled();
+                if (request.generation_valid && !request.generation_valid()) {
+                    throw ClosedError("torque transition generation ended");
+                }
+                if (request.deadline && runtime::Clock::now() >= *request.deadline) {
+                    throw TimeoutError("torque transition deadline expired");
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            return outcome;
+        }
         case CommandSemantic::kAngles:
             device.angle.set_angles(fixed_values<uint8_t, l6::kJointCount>(request));
             break;
@@ -369,11 +438,13 @@ namespace linkerbot::hand::unified_detail {
         return {3, true};
     }
 
-    CommandOutcome operate_device(l6::L6 &device, DeviceOperation operation, std::chrono::milliseconds) {
+    CommandOutcome operate_device(l6::L6 &device, DeviceOperation operation, std::chrono::milliseconds timeout) {
         switch (operation) {
         case DeviceOperation::kClearFaults:
             device.fault.clear_faults();
             return {1, false};
+        case DeviceOperation::kSaveParametersConfirmed:
+            return confirmed_save(device, timeout);
         case DeviceOperation::kSaveParameters:
             device.config.save();
             return {1, false};
@@ -382,7 +453,10 @@ namespace linkerbot::hand::unified_detail {
         }
     }
 
-    CommandOutcome operate_device(o6::O6 &device, DeviceOperation operation, std::chrono::milliseconds) {
+    CommandOutcome operate_device(o6::O6 &device, DeviceOperation operation, std::chrono::milliseconds timeout) {
+        if (operation == DeviceOperation::kSaveParametersConfirmed) {
+            return confirmed_save(device, timeout);
+        }
         if (operation == DeviceOperation::kSaveParameters) {
             device.config.save();
             return {1, false};
@@ -404,6 +478,9 @@ namespace linkerbot::hand::unified_detail {
 
     CommandOutcome operate_device(l30::L30 &device, DeviceOperation operation, std::chrono::milliseconds timeout) {
         switch (operation) {
+        case DeviceOperation::kCalibrate:
+            device.control.calibrate(timeout);
+            return {3, true};
         case DeviceOperation::kEnable:
             device.control.enable(timeout);
             return {1, true};

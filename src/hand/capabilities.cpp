@@ -68,6 +68,10 @@ namespace linkerbot::hand {
             return disable;
         case DeviceOperation::kSaveParameters:
             return save_parameters;
+        case DeviceOperation::kSaveParametersConfirmed:
+            return save_parameters_confirmed;
+        case DeviceOperation::kCalibrate:
+            return calibrate;
         }
         return false;
     }
@@ -422,7 +426,9 @@ namespace linkerbot::hand {
             << ",\"enable\":" << (capabilities.operations.enable ? "true" : "false")
             << ",\"disable\":" << (capabilities.operations.disable ? "true" : "false")
             << ",\"save_parameters\":" << (capabilities.operations.save_parameters ? "true" : "false")
-            << ",\"acknowledged\":[";
+            << ",\"save_parameters_confirmed\":"
+            << (capabilities.operations.save_parameters_confirmed ? "true" : "false")
+            << ",\"calibrate\":" << (capabilities.operations.calibrate ? "true" : "false") << ",\"acknowledged\":[";
         for (size_t index = 0; index < capabilities.operations.acknowledged_operations.size(); ++index) {
             if (index != 0) {
                 out << ',';

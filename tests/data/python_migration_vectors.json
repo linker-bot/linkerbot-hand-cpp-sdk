@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "python_commit": "3a63e723b9a0046e9a60a58339b9f064ef5b70fd",
+  "scope": "outgoing physical CAN frames; no hardware validation",
+  "scenarios": {
+    "l6_position_kp": [
+      {
+        "id": 40,
+        "fd": false,
+        "extended": false,
+        "brs": false,
+        "data": [
+          6,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    ],
+    "l6_position_kd": [
+      {
+        "id": 40,
+        "fd": false,
+        "extended": false,
+        "brs": false,
+        "data": [
+          7,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    ],
+    "l6_torque_kd": [
+      {
+        "id": 40,
+        "fd": false,
+        "extended": false,
+        "brs": false,
+        "data": [
+          8,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    ],
+    "l6_torques": [
+      {
+        "id": 40,
+        "fd": false,
+        "extended": false,
+        "brs": false,
+        "data": [
+          3,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    ],
+    "l6_limit_compensations": [
+      {
+        "id": 40,
+        "fd": false,
+        "extended": false,
+        "brs": false,
+        "data": [
+          56,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    ],
+    "l6_save_confirmed": [
+      {
+        "id": 40,
+        "fd": false,
+        "extended": false,
+        "brs": false,
+        "data": [
+          207,
+          207,
+          207,
+          207,
+          207,
+          207,
+          207,
+          207
+        ]
+      }
+    ],
+    "o30_torque_limits": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          6,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "o30_motion_times": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          8,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "l30_calibrate": [
+      {
+        "id": 35717376,
+        "fd": true,
+        "extended": true,
+        "brs": false,
+        "data": [
+          0,
+          0
+        ]
+      },
+      {
+        "id": 39854336,
+        "fd": true,
+        "extended": true,
+        "brs": false,
+        "data": [
+          6,
+          0,
+          18,
+          52,
+          86,
+          120,
+          154,
+          188,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "id": 39887104,
+        "fd": true,
+        "extended": true,
+        "brs": false,
+        "data": [
+          0,
+          0
+        ]
+      }
+    ]
+  }
+}

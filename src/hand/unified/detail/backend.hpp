@@ -22,13 +22,15 @@ namespace linkerbot::hand::unified_detail {
         std::function<void(uint64_t, std::chrono::steady_clock::time_point)> dispatched;
         std::function<void()> acknowledged;
         runtime::CancellationToken cancellation;
+        std::optional<DeviceOperation> operation;
     };
 
     using TelemetrySample =
         std::variant<AngleSample, MeasuredSpeedSample, ConfiguredSpeedSample, ConfiguredAccelerationSample,
                      CurrentSample, CurrentLimitSample, TorqueSample, TemperatureSample, ForceSample,
                      NormalForceResultantSample, FaultSample, VoltageSample, StallDetectionTimeSample,
-                     StallThresholdSample, StallHoldCurrentSample>;
+                     StallThresholdSample, StallHoldCurrentSample, PositionKpSample, PositionKdSample, TorqueKdSample,
+                     TorqueLimitSample, MotionTimeSample, LimitCompensationSample>;
 
     class DeviceBackend {
     public:

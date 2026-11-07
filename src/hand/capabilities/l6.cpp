@@ -24,6 +24,8 @@ namespace linkerbot::hand::capabilities_detail {
             profile.operations.read_device_info = true;
             profile.operations.clear_faults = true;
             profile.operations.save_parameters = true;
+            profile.operations.save_parameters_confirmed = true;
+            profile.operations.acknowledged_operations = {DeviceOperation::kSaveParametersConfirmed};
             profile.joints = joints;
             profile.commands = {
                 angle_command(joints, "u8", AckSupport::kUnsupported, true),
@@ -39,6 +41,19 @@ namespace linkerbot::hand::capabilities_detail {
                 command(CommandSemantic::kStallHoldCurrents, names, u8, "u8", "count",
                         "protocol calls this stall torque; physical current scale is unverified",
                         Confidence::kConflicting, AckSupport::kRequired),
+                command(CommandSemantic::kPositionKp, names, {0, 200, true, 1}, "u8", "count",
+                        "raw Kp times 10; position mode only", Confidence::kConflicting, AckSupport::kRequired),
+                command(CommandSemantic::kPositionKd, names, {0, 255, true, 1}, "u8", "count",
+                        "position-mode derivative gain; raw protocol count", Confidence::kConflicting,
+                        AckSupport::kRequired),
+                command(CommandSemantic::kTorqueKd, names, {0, 255, true, 1}, "u8", "count",
+                        "torque-mode derivative gain; raw protocol count", Confidence::kConflicting,
+                        AckSupport::kRequired),
+                command(CommandSemantic::kTorques, names, {0, 255, true, 1}, "u8", "count",
+                        "0 selects position mode; 1..255 torque output; physical unit unverified", Confidence::kUnknown,
+                        AckSupport::kRequired),
+                command(CommandSemantic::kLimitCompensations, names, {0, 255, true, 1}, "u8", "count",
+                        "raw limit compensation; no physical conversion", Confidence::kUnknown, AckSupport::kRequired),
             };
             profile.telemetry = {
                 angle_telemetry(joints, "u8"),
@@ -63,10 +78,26 @@ namespace linkerbot::hand::capabilities_detail {
                           "count", "stall threshold; physical unit is unverified", Confidence::kUnknown, false),
                 telemetry(TelemetrySemantic::kStallHoldCurrents, names, ReadMode::kQuery, "u8", {l6::kJointCount}, u8,
                           "count", "protocol calls this stall torque", Confidence::kConflicting, false),
+                telemetry(TelemetrySemantic::kPositionKp, names, ReadMode::kQuery, "u8", {l6::kJointCount},
+                          NumericRange{0, 200, true, 1}, "count", "raw Kp times 10; position mode only",
+                          Confidence::kConflicting, false),
+                telemetry(TelemetrySemantic::kPositionKd, names, ReadMode::kQuery, "u8", {l6::kJointCount},
+                          NumericRange{0, 255, true, 1}, "count", "position-mode derivative gain; raw protocol count",
+                          Confidence::kConflicting, false),
+                telemetry(TelemetrySemantic::kTorqueKd, names, ReadMode::kQuery, "u8", {l6::kJointCount},
+                          NumericRange{0, 255, true, 1}, "count", "torque-mode derivative gain; raw protocol count",
+                          Confidence::kConflicting, false),
+                telemetry(TelemetrySemantic::kLimitCompensations, names, ReadMode::kQuery, "u8", {l6::kJointCount},
+                          NumericRange{0, 255, true, 1}, "count", "raw limit compensation; no physical conversion",
+                          Confidence::kUnknown, false),
             };
             // Shared telemetry freshness contract with Python Hand SDK.
             for (auto &channel : profile.telemetry) {
                 switch (channel.semantic) {
+                case TelemetrySemantic::kPositionKp:
+                case TelemetrySemantic::kPositionKd:
+                case TelemetrySemantic::kTorqueKd:
+                case TelemetrySemantic::kLimitCompensations:
                 case TelemetrySemantic::kTorques:
                 case TelemetrySemantic::kTemperatures:
                 case TelemetrySemantic::kStallDetectionTimes:

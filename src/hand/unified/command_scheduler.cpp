@@ -19,6 +19,18 @@ namespace linkerbot::hand::unified_detail {
             return CommandFamily::kAccelerationSetting;
         case CommandSemantic::kCurrentLimits:
             return CommandFamily::kCurrentLimit;
+        case CommandSemantic::kPositionKp:
+        case CommandSemantic::kPositionKd:
+        case CommandSemantic::kTorqueKd:
+            return CommandFamily::kControlGain;
+        case CommandSemantic::kTorqueLimits:
+            return CommandFamily::kTorqueLimit;
+        case CommandSemantic::kTorques:
+            return CommandFamily::kTorqueTarget;
+        case CommandSemantic::kMotionTimes:
+            return CommandFamily::kMotionTime;
+        case CommandSemantic::kLimitCompensations:
+            return CommandFamily::kLimitCompensation;
         case CommandSemantic::kStallDetectionTimes:
         case CommandSemantic::kStallThresholds:
         case CommandSemantic::kStallHoldCurrents:
@@ -37,6 +49,16 @@ namespace linkerbot::hand::unified_detail {
             return "acceleration_targets";
         case CommandFamily::kCurrentLimit:
             return "current_limits";
+        case CommandFamily::kControlGain:
+            return "control_gains";
+        case CommandFamily::kTorqueLimit:
+            return "torque_limits";
+        case CommandFamily::kTorqueTarget:
+            return "torque_targets";
+        case CommandFamily::kMotionTime:
+            return "motion_times";
+        case CommandFamily::kLimitCompensation:
+            return "limit_compensation";
         case CommandFamily::kStallConfiguration:
             return "stall";
         case CommandFamily::kDiscreteOperation:
@@ -112,14 +134,14 @@ namespace linkerbot::hand::unified_detail {
 
     bool CommandScheduler::latest(CommandFamily family) {
         return family == CommandFamily::kAngleTarget || family == CommandFamily::kSpeedSetting ||
-               family == CommandFamily::kCurrentLimit;
+               family == CommandFamily::kCurrentLimit || family == CommandFamily::kTorqueLimit;
     }
 
     size_t CommandScheduler::pending_size() const { return fifo_.size() + latest_.size(); }
 
     CommandHandle CommandScheduler::accept(CommandRequest request, AckSupport support, ErrorContext context,
                                            Execute execute) {
-        const auto family = command_family(request.semantic);
+        const auto family = request.operation ? CommandFamily::kDiscreteOperation : command_family(request.semantic);
         std::unique_lock<std::mutex> lock(mutex_);
         const auto now = now_();
         expire(now);

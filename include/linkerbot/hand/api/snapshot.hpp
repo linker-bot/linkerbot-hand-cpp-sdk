@@ -30,6 +30,12 @@ namespace linkerbot::hand {
         std::optional<double> stall_threshold_raw;
         std::optional<double> stall_hold_current_raw;
         std::optional<uint8_t> fault_raw;
+        std::optional<double> position_kp_raw;
+        std::optional<double> position_kd_raw;
+        std::optional<double> torque_kd_raw;
+        std::optional<double> torque_limits_raw;
+        std::optional<double> motion_times_raw;
+        std::optional<double> limit_compensations_raw;
     };
 
     struct HandSnapshot {
@@ -55,5 +61,11 @@ namespace linkerbot::hand {
         std::optional<StallDetectionTimeSample> stall_detection_times;
         std::optional<StallThresholdSample> stall_thresholds;
         std::optional<StallHoldCurrentSample> stall_hold_currents;
+        std::optional<PositionKpSample> position_kp;
+        std::optional<PositionKdSample> position_kd;
+        std::optional<TorqueKdSample> torque_kd;
+        std::optional<TorqueLimitSample> torque_limits;
+        std::optional<MotionTimeSample> motion_times;
+        std::optional<LimitCompensationSample> limit_compensations;
     };
 } // namespace linkerbot::hand

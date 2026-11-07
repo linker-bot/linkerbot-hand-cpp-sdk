@@ -19,7 +19,8 @@ namespace linkerbot::hand {
         std::variant<AngleSample, MeasuredSpeedSample, ConfiguredSpeedSample, ConfiguredAccelerationSample,
                      CurrentSample, CurrentLimitSample, TorqueSample, TemperatureSample, ForceSample,
                      NormalForceResultantSample, FaultSample, VoltageSample, StallDetectionTimeSample,
-                     StallThresholdSample, StallHoldCurrentSample>;
+                     StallThresholdSample, StallHoldCurrentSample, PositionKpSample, PositionKdSample, TorqueKdSample,
+                     TorqueLimitSample, MotionTimeSample, LimitCompensationSample>;
 
     struct HandEvent {
         TelemetrySemantic semantic = TelemetrySemantic::kAngles;

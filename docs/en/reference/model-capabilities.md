@@ -1,6 +1,6 @@
 # Model Capabilities
 
-This reference covers control, telemetry, configuration, and model-specific features in C++ SDK `0.3.0`.
+This reference covers control, telemetry, configuration, and model-specific features in C++ SDK `0.3.4`.
 Compare models in the [Capabilities overview](#capabilities-overview), then read the corresponding section:
 [L6](#l6), [O6](#o6), [L20 Lite](#l20-lite), [L20](#l20), [L30](#l30), [O30](#o30).
 
@@ -37,9 +37,13 @@ for final stages and ACK requirements, see [Command completion and error handlin
 | Clear faults | Supported | — | — | Supported | — | — |
 | Enable/disable | — | — | — | — | Supported | — |
 | Save parameters | Supported | Supported | — | — | — | — |
+| L6 gains / torque output / compensation | Supported | — | — | — | — | — |
+| Torque limits / motion time | — | — | — | — | — | Explicit V25 |
+| Calibration | — | — | — | — | Supported | — |
+| Confirmed parameter save | Supported | Supported | — | — | — | — |
 
 Model Managers provide operations such as L20 Lite configuration saving and O30 Flash saving; see each model's dedicated features.
-L6 gains are read and written only through native Managers; O30 `pid` is a different model-specific entry point and cannot be interchanged directly.
+L6 gains are available through unified methods and native Managers. O30 `pid` is distinct; see [Python behavior baseline](../guides/python-behavior-baseline.md).
 
 ### State and configuration reads
 
@@ -91,19 +95,10 @@ Default addresses are left `0x28`, right `0x27`; the native model entry point is
 
 The native model API provides corresponding operations through `angle`, `speed`, `current`, `current_limit`, `torque`, `temperature`,
 `fault`, `force_sensor`, `stall`, `version`, `config`, and other Managers;
-All three gains are read and written only through `position_kp`, `position_kd`, and `torque_kd` Managers using
-`set_values()` / `get_blocking()` / `get_snapshot()`, without entries in `HandDevice` capabilities, snapshots, or event streams.
-
-| Native Manager | Raw write range | Semantics |
-| --- | --- | --- |
-| `position_kp` | `0..200` | Protocol states actual Kp = raw × 10; gain interpretation remains disputed |
-| `position_kd` | `0..255` | Recommended values are not SDK hard limits |
-| `torque_kd` | `0..255` | Physical conversion unconfirmed |
-
-All writes use six-joint `std::array<uint8_t, 6>` values. Reads retain actual device values, including values beyond documented write ranges.
-Former unified gain methods, samples, and fields have been removed; see the migration instructions in the [API guide](../guides/usage.md#using-model-specific-features-through-managers).
-Torque targets are available only through `torque.set_torques()`; limit-compensation reads/writes only through
-`limit_compensation.set_values()` / `get_blocking()`, without unified snapshots or event-stream fields.
+Unified gain methods share the native Managers' raw protocol semantics. Kp writes accept `0..200`, both Kd writes `0..255`;
+replies retain returned bytes even outside the documented write range. Unified snapshots and streams include these channels and limit compensation.
+`set_torques()` is FIFO with explicit mode-transition guards; ACKs are not measured torque.
+`save_parameters_confirmed()` requires `CF 01`; legacy `save_parameters()` is dispatch-only.
 
 Dedicated configuration includes `config.set_id()`, `set_transmit_id()`, `set_receive_id()`,
 `set_reply_enabled()`, `restore_factory()`, and `save()`. Reconnect at the new address after changing it;
@@ -113,7 +108,7 @@ Limitations and usage notes:
 
 - The unified API does not currently provide L6 measured speed; use `get_configured_speeds()` for configured speed.
 - Native `stall.set_times()` uses milliseconds; the unified API uses raw 10 ms counts. Do not pass the same values directly.
-- Unified acceleration, torque-target writes, limit compensation, voltage, enable, and disable are unsupported.
+- Unified acceleration, voltage, enable and disable remain unsupported.
 - Confirm device state before adjusting gains, torque mode, compensation, or persistent parameters. Common-feature hardware passes do not validate these advanced operations.
 
 ### Optional L6 CAN FD protocol
@@ -262,7 +257,11 @@ Limitations and usage notes:
 - Configured speed/current limits only have SDK target caches, without independent device configuration readback; caches do not prove application by the device.
 - Unified acceleration, torque, gains, limit compensation, stall configuration, voltage, fault clearing, and parameter saving are unsupported.
 
+L30 also exposes `calibrate()` and native `control.calibrate()`: disable, unlock, then calibrate, each requiring ACK. It does not re-enable the device; hardware validation is pending.
+
 ## O30
+
+Explicit `O30Layout::kPythonV25` adds torque-limit and motion-time reads/writes and uses the compact whole-hand protocol for unified vector operations. Default native mounted V36 behavior remains unchanged. See [Python behavior baseline](../guides/python-behavior-baseline.md).
 
 20 joints, standard HOP/CAN FD frames without BRS; default request ID `0x001`.
 The native entry point is `o30::O30`; the SDK's 20-joint vectors map to protocol slots. Do not use the total slot count as vector length.

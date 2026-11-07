@@ -10,6 +10,8 @@
 #include <linkerbot/hand/capabilities.hpp>
 
 namespace linkerbot::hand {
+    enum class O30Layout : uint8_t { kMountedV36, kPythonV25 };
+
     enum class L6Protocol : uint8_t { kClassic, kHopV004 };
     // Runtime-only policies that may be supplied independently of a physical
     // endpoint. Discovery owns model, side, interface and address selection;
@@ -34,6 +36,8 @@ namespace linkerbot::hand {
 
         uint32_t recovery_attempts = 1;
         std::chrono::milliseconds recovery_backoff{100};
+        O30Layout o30_layout = O30Layout::kMountedV36;
+        bool empty_polling_plan_disables = false;
     };
 
     // Fully resolved input consumed by HandDevice. Direct construction fills
@@ -89,5 +93,9 @@ namespace linkerbot::hand {
         std::chrono::milliseconds recovery_backoff{100};
         // Explicit opt-in for the latest L6 firmware; legacy defaults remain Classic.
         L6Protocol l6_protocol = L6Protocol::kClassic;
+        // Explicit protocol layout, not firmware inference. V25 matches the
+        // Python whole-hand path; native Managers retain mounted V36 behavior.
+        O30Layout o30_layout = O30Layout::kMountedV36;
+        bool empty_polling_plan_disables = false;
     };
 } // namespace linkerbot::hand

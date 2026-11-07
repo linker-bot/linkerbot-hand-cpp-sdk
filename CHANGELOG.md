@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.4
+
+- Add unified L6 gains, torque output and limit compensation; explicit Classic save ACKs; L30 calibration; and an opt-in O30 V25 path with torque-limit and motion-time support.
+- Add pinned Python outgoing-frame vectors, failure-boundary regressions and installed-consumer coverage. Retain existing native defaults and transport v0.3.4. Rebuild downstream consumers; new hardware acceptance is not claimed.
+- See [release notes](RELEASE_NOTES.md) and [Python behavior baseline](docs/en/guides/python-behavior-baseline.md) for scope and remaining migration requirements.
+
 ## 0.3.0 (unreleased)
 
 ### Build and platform compatibility

@@ -34,7 +34,9 @@ target_compile_definitions(tests PRIVATE LINKERBOT_TEST_CONFIG_DIR="${CMAKE_CURR
 
 add_executable(async-command-probe EXCLUDE_FROM_ALL ../validation/async_command_probe.cpp)
 target_link_libraries(async-command-probe PRIVATE linkerbot::cpp-sdk)
-add_dependencies(tests async-command-probe)
+add_executable(python-migration-probe EXCLUDE_FROM_ALL ../validation/python_migration_probe.cpp)
+target_link_libraries(python-migration-probe PRIVATE linkerbot::cpp-sdk)
+add_dependencies(tests async-command-probe python-migration-probe)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 set(LINKERBOT_PYTHON_SDK_DIR "" CACHE PATH "Optional Python SDK source checkout for cross-language async vectors")
 if(Python3_Interpreter_FOUND)
@@ -57,6 +59,11 @@ if(Python3_Interpreter_FOUND)
         --report "${CMAKE_CURRENT_BINARY_DIR}/async-behavior-report.json"
         ${async_vector_options})
     set_tests_properties(async-behavior-vectors PROPERTIES TIMEOUT 120)
+    add_test(NAME python-migration-vectors COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../validation/check_python_migration.py"
+        --cpp-probe "$<TARGET_FILE:python-migration-probe>"
+        ${async_vector_options})
+    set_tests_properties(python-migration-vectors PROPERTIES TIMEOUT 120)
 else()
     if(LINKERBOT_PYTHON_SDK_DIR)
         message(FATAL_ERROR "Cross-language vectors require a Python interpreter")

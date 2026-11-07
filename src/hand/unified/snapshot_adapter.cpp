@@ -340,6 +340,12 @@ namespace linkerbot::hand::unified_detail {
                 joint.configured_acceleration_raw = typed_value_at(snapshot.configured_accelerations, index);
                 joint.current_raw = typed_value_at(snapshot.currents, index);
                 joint.current_limit_raw = typed_value_at(snapshot.current_limits, index);
+                joint.position_kp_raw = typed_value_at(snapshot.position_kp, index);
+                joint.position_kd_raw = typed_value_at(snapshot.position_kd, index);
+                joint.torque_kd_raw = typed_value_at(snapshot.torque_kd, index);
+                joint.torque_limits_raw = typed_value_at(snapshot.torque_limits, index);
+                joint.motion_times_raw = typed_value_at(snapshot.motion_times, index);
+                joint.limit_compensations_raw = typed_value_at(snapshot.limit_compensations, index);
                 joint.torque_raw = typed_value_at(snapshot.torques, index);
                 joint.temperature_raw = typed_value_at(snapshot.temperatures, index);
                 joint.voltage_raw = typed_value_at(snapshot.voltages, index);
@@ -394,6 +400,22 @@ namespace linkerbot::hand::unified_detail {
     [[nodiscard]] HandSnapshot unified_snapshot(const l6::Snapshot &source, Model model, HandSide side,
                                                 const DeviceCapabilities &capabilities) {
         auto result = snapshot_base(source, model, side, capabilities);
+        if (source.position_kp) {
+            result.position_kp =
+                l6_control_sample<PositionKpSample>(*source.position_kp, capabilities, TelemetrySemantic::kPositionKp);
+        }
+        if (source.position_kd) {
+            result.position_kd =
+                l6_control_sample<PositionKdSample>(*source.position_kd, capabilities, TelemetrySemantic::kPositionKd);
+        }
+        if (source.torque_kd) {
+            result.torque_kd =
+                l6_control_sample<TorqueKdSample>(*source.torque_kd, capabilities, TelemetrySemantic::kTorqueKd);
+        }
+        if (source.limit_compensations) {
+            result.limit_compensations = l6_control_sample<LimitCompensationSample>(
+                *source.limit_compensations, capabilities, TelemetrySemantic::kLimitCompensations);
+        }
         if (source.configured_speeds) {
             result.configured_speeds = l6_control_sample<ConfiguredSpeedSample>(*source.configured_speeds, capabilities,
                                                                                 TelemetrySemantic::kConfiguredSpeeds);
@@ -703,6 +725,12 @@ namespace linkerbot::hand::unified_detail {
         break
 
         switch (semantic) {
+            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kPositionKp, position_kp);
+            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kPositionKd, position_kd);
+            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kTorqueKd, torque_kd);
+            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kTorqueLimits, torque_limits);
+            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kMotionTimes, motion_times);
+            LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kLimitCompensations, limit_compensations);
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kAngles, angles);
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kMeasuredSpeeds, measured_speeds);
             LINKERBOT_RETURN_SNAPSHOT_SAMPLE(kConfiguredSpeeds, configured_speeds);

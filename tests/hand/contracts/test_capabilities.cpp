@@ -380,29 +380,15 @@ TEST_CASE("capabilities: transport profiles match the implemented buses", "[capa
     REQUIRE_FALSE(o30.extended_frame);
 }
 
-TEST_CASE("capabilities: removed unified commands and telemetry stay unassigned", "[comm][capabilities]") {
-    // Historical IDs are reserved even though their named semantics are gone.
+TEST_CASE("capabilities: new operations remain model scoped", "[comm][capabilities]") {
     for (const auto model : kModels) {
-        for (const auto side : {HandSide::kLeft, HandSide::kRight}) {
-            const auto &profile = declared_capabilities(model, side);
-            CAPTURE(model, side);
-            for (const auto id : {7, 8, 9, 13}) { // Removed torque, motion-time and compensation commands.
-                const auto semantic = static_cast<CommandSemantic>(id);
-                REQUIRE_FALSE(profile.supports(semantic));
-                REQUIRE(profile.command(semantic) == nullptr);
-            }
-            for (const auto id : {9, 21, 25}) { // Removed limits, motion time and compensation telemetry.
-                const auto semantic = static_cast<TelemetrySemantic>(id);
-                REQUIRE_FALSE(profile.supports(semantic));
-                REQUIRE(profile.telemetry_channel(semantic) == nullptr);
-            }
-            // Fixed-underlying-type enum values are valid C++17, including unknown values and bit masks.
-            // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
-            const auto removed_operation = static_cast<DeviceOperation>(4);
-            REQUIRE_FALSE(profile.supports(removed_operation));
-            REQUIRE_FALSE(profile.operations.acknowledged(removed_operation));
-            REQUIRE(serialize_capabilities(profile).find("\"calibrate\"") == std::string::npos);
-        }
+        const auto &profile = declared_capabilities(model, HandSide::kLeft);
+        REQUIRE(profile.supports(DeviceOperation::kCalibrate) == (model == Model::kL30));
+        REQUIRE(profile.operations.acknowledged(DeviceOperation::kCalibrate) == (model == Model::kL30));
+        REQUIRE(profile.supports(DeviceOperation::kSaveParametersConfirmed) ==
+                (model == Model::kL6 || model == Model::kO6));
+        REQUIRE_FALSE(profile.supports(CommandSemantic::kTorqueLimits));
+        REQUIRE_FALSE(profile.supports(CommandSemantic::kMotionTimes));
     }
 }
 

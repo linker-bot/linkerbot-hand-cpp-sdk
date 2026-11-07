@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.4
+
+- 新增 L6 统一增益、扭矩输出及限位补偿，Classic 显式保存 ACK，L30 校准，以及显式 O30 V25 布局的扭矩限制和运动时间。
+- 增加固定 Python 发送帧向量、失败边界回归和安装消费者验证；保留原生默认行为和 transport v0.3.4 依赖。
+- 升级后重新编译全部消费者；不新增实机验收结论。范围与剩余迁移要求见 [Python 行为基准](docs/zh/guides/python-behavior-baseline.md)。
+
 ## 0.3.0（未发布）
 
 - 增加显式源码/预构建 transport 接入选项和独立 CMake presets。

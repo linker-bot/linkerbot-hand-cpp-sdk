@@ -44,8 +44,10 @@ namespace linkerbot::hand::capabilities_detail {
             profile.transport = l30_transport();
             profile.operations.read_device_info = true;
             profile.operations.enable = true;
+            profile.operations.calibrate = true;
             profile.operations.disable = true;
-            profile.operations.acknowledged_operations = {DeviceOperation::kEnable, DeviceOperation::kDisable};
+            profile.operations.acknowledged_operations = {DeviceOperation::kEnable, DeviceOperation::kDisable,
+                                                          DeviceOperation::kCalibrate};
             profile.joints = joints;
             profile.commands = {
                 angle_command(joints, "i16_be"),

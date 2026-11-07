@@ -24,6 +24,12 @@ namespace linkerbot::hand::unified_detail {
 
     void publish_snapshot_events(const HandSnapshot &snapshot, const std::shared_ptr<EventQueue<HandEvent>> &queue,
                                  std::map<TelemetrySemantic, std::chrono::steady_clock::time_point> &last_seen) {
+        publish_if_new(snapshot.position_kp, TelemetrySemantic::kPositionKp, queue, last_seen);
+        publish_if_new(snapshot.position_kd, TelemetrySemantic::kPositionKd, queue, last_seen);
+        publish_if_new(snapshot.torque_kd, TelemetrySemantic::kTorqueKd, queue, last_seen);
+        publish_if_new(snapshot.torque_limits, TelemetrySemantic::kTorqueLimits, queue, last_seen);
+        publish_if_new(snapshot.motion_times, TelemetrySemantic::kMotionTimes, queue, last_seen);
+        publish_if_new(snapshot.limit_compensations, TelemetrySemantic::kLimitCompensations, queue, last_seen);
         publish_if_new(snapshot.angles, TelemetrySemantic::kAngles, queue, last_seen);
         publish_if_new(snapshot.measured_speeds, TelemetrySemantic::kMeasuredSpeeds, queue, last_seen);
         publish_if_new(snapshot.configured_speeds, TelemetrySemantic::kConfiguredSpeeds, queue, last_seen);

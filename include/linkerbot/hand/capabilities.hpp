@@ -60,11 +60,16 @@ namespace linkerbot::hand {
         kSpeeds,
         kAccelerations,
         kCurrentLimits,
-        // Values 4..6 belonged to removed unified L6 gains.
-        // Values 7..9 belonged to removed torque-limit, torque-target and motion-time commands.
+        kPositionKp = 4,
+        kPositionKd,
+        kTorqueKd,
+        kTorqueLimits,
+        kTorques,
+        kMotionTimes,
         kStallDetectionTimes = 10,
         kStallThresholds,
-        kStallHoldCurrents
+        kStallHoldCurrents,
+        kLimitCompensations
     };
 
     enum class TelemetrySemantic : uint8_t {
@@ -73,9 +78,11 @@ namespace linkerbot::hand {
         kConfiguredSpeeds,
         kConfiguredAccelerations,
         kCurrents,
-        // Values 5..7 belonged to removed unified L6 gains.
+        kPositionKp = 5,
+        kPositionKd,
+        kTorqueKd,
         kCurrentLimits = 8,
-        // Value 9 belonged to removed torque-limit telemetry.
+        kTorqueLimits = 9,
         kTorques = 10,
         kTemperatures,
         kForce,
@@ -87,10 +94,11 @@ namespace linkerbot::hand {
         kForcePx,
         kFaults,
         kVoltages,
-        // Value 21 belonged to removed motion-time telemetry.
+        kMotionTimes = 21,
         kStallDetectionTimes = 22,
         kStallThresholds,
-        kStallHoldCurrents
+        kStallHoldCurrents,
+        kLimitCompensations
     };
 
     enum class DeviceOperation : uint8_t {
@@ -98,8 +106,9 @@ namespace linkerbot::hand {
         kClearFaults,
         kEnable,
         kDisable,
-        // Value 4 was the removed zero-calibration operation.
-        kSaveParameters = 5
+        kCalibrate = 4,
+        kSaveParameters = 5,
+        kSaveParametersConfirmed
     };
 
     struct NumericRange {
@@ -215,6 +224,8 @@ namespace linkerbot::hand {
         bool disable = false;
         bool save_parameters = false;
         std::vector<DeviceOperation> acknowledged_operations;
+        bool calibrate = false;
+        bool save_parameters_confirmed = false;
 
         [[nodiscard]] bool supports(DeviceOperation operation) const noexcept;
         [[nodiscard]] bool acknowledged(DeviceOperation operation) const noexcept;
