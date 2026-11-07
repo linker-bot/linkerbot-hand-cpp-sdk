@@ -56,6 +56,7 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME async-behavior-vectors COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/../validation/check_async_vectors.py"
         --cpp-probe "$<TARGET_FILE:async-command-probe>"
+        --cpp-python-profile
         --report "${CMAKE_CURRENT_BINARY_DIR}/async-behavior-report.json"
         ${async_vector_options})
     set_tests_properties(async-behavior-vectors PROPERTIES TIMEOUT 120)

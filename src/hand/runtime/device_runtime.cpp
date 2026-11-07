@@ -21,7 +21,9 @@ namespace linkerbot::hand::runtime {
         if (timeout.count() <= 0) {
             throw ValidationError("timeout must be positive");
         }
-        return Clock::now() + timeout;
+        const auto now = Clock::now();
+        const auto available = std::chrono::duration_cast<std::chrono::milliseconds>(Deadline::max() - now);
+        return timeout >= available ? Deadline::max() : now + timeout;
     }
     std::chrono::milliseconds remaining(Deadline deadline) {
         const auto now = Clock::now();
@@ -333,6 +335,14 @@ namespace linkerbot::hand::runtime {
         std::mutex runtimes_mutex;
         std::map<std::pair<const void *, std::string>, std::weak_ptr<DeviceRuntime>> runtimes;
     }
+    namespace {
+        struct ResponsePolicy {
+            unified_detail::RuntimeAccess::PlanTransform transform;
+            Deadline deadline;
+            std::function<bool()> generation_valid;
+        };
+        thread_local std::map<const DeviceRuntime *, ResponsePolicy> response_policies;
+    }
     struct Request::State {
         mutable std::mutex mutex;
         std::condition_variable cv;
@@ -340,10 +350,13 @@ namespace linkerbot::hand::runtime {
         std::exception_ptr error;
         Sample result;
         std::optional<Sample> response;
+        std::exception_ptr buffered_error;
+        bool buffered_isolation = true;
         bool published = false;
         TransactionPlan plan;
         Deadline deadline;
         CancellationToken external;
+        std::function<bool()> generation_valid;
         CancellationToken poll_cancel;
         CancellationSource abort;
         std::optional<transport::SendReceipt> receipt;
@@ -358,6 +371,41 @@ namespace linkerbot::hand::runtime {
         bool command_terminal = false;
         bool return_after_send = false;
         bool scoped_command = false;
+        bool scoped_response_policy = false;
+        bool response_deadline_armed = false;
+        bool response_window_expiry = false;
+        std::optional<Deadline> receipt_response_deadline() const {
+            if (!plan.response_window || !receipt) {
+                return std::nullopt;
+            }
+            const auto sent = receipt->result();
+            if (!sent.completed_at || sent.error) {
+                return std::nullopt;
+            }
+            const auto available =
+                std::chrono::duration_cast<std::chrono::microseconds>(Deadline::max() - *sent.completed_at);
+            return *plan.response_window >= available ? Deadline::max() : *sent.completed_at + *plan.response_window;
+        }
+        std::exception_ptr expired_response(Deadline now) const {
+            const auto response_deadline = receipt_response_deadline();
+            if (!response_deadline || now < *response_deadline) {
+                return {};
+            }
+            if (*response_deadline <= deadline) {
+                return std::make_exception_ptr(ResponseTimeoutError(
+                    "device response window expired", context,
+                    ::linkerbot::hand::detail::checked_value(plan.response_window, "missing response window"),
+                    plan.late_guard));
+            }
+            return std::make_exception_ptr(timeout_error("device execution deadline expired"));
+        }
+        std::exception_ptr timeout_exception(const std::string &message) const {
+            if (response_window_expiry) {
+                return std::make_exception_ptr(ResponseTimeoutError(
+                    message, context, plan.response_window.value_or(std::chrono::microseconds{0}), plan.late_guard));
+            }
+            return std::make_exception_ptr(timeout_error(message));
+        }
         std::vector<std::pair<std::string, Sample>> deferred_updates;
 
         TimeoutError timeout_error(std::string message) const {
@@ -378,13 +426,15 @@ namespace linkerbot::hand::runtime {
             throw ValidationError("empty runtime request");
         }
         std::unique_lock<std::mutex> lock(state_->mutex);
-        if (!wait_for_state(state_->cv, lock, std::min(deadline, state_->deadline),
+        const auto wait_deadline =
+            state_->scoped_response_policy ? Deadline::max() : std::min(deadline, state_->deadline);
+        if (!wait_for_state(state_->cv, lock, wait_deadline,
                             [&] { return state_->done || (state_->return_after_send && state_->sent_result); })) {
             lock.unlock();
             if (state_->expire) {
                 state_->expire();
             }
-            throw state_->timeout_error("device request deadline expired");
+            std::rethrow_exception(state_->timeout_exception("device request deadline expired"));
         }
         if (state_->return_after_send && state_->sent_result &&
             ::linkerbot::hand::detail::checked_value(state_->sent_result, "missing runtime state: state_->sent_result")
@@ -412,7 +462,9 @@ namespace linkerbot::hand::runtime {
             throw ValidationError("empty runtime request");
         }
         std::unique_lock<std::mutex> lock(state_->mutex);
-        if (!wait_for_state(state_->cv, lock, std::min(deadline, state_->deadline),
+        const auto wait_deadline =
+            state_->scoped_response_policy ? Deadline::max() : std::min(deadline, state_->deadline);
+        if (!wait_for_state(state_->cv, lock, wait_deadline,
                             [&] { return state_->done || state_->sent_result.has_value(); })) {
             lock.unlock();
             if (state_->expire) {
@@ -508,6 +560,7 @@ namespace linkerbot::hand::runtime {
         uint64_t reconnect_count = 0;
         std::optional<HealthTimePoint> last_successful_send;
         std::optional<HealthTimePoint> last_successful_receive;
+        Deadline last_endpoint_receive{};
         std::optional<HealthTimePoint> last_successful_transaction;
         size_t active_pollers = 0;
         uint64_t next_transaction = 1;
@@ -539,6 +592,7 @@ namespace linkerbot::hand::runtime {
             unified_detail::RuntimeAccess::FinalSend final_send;
             std::function<void()> prepare_send;
             std::function<void()> accepted_send;
+            unified_detail::RuntimeAccess::ReceiptAccepted receipt_accepted;
         };
         std::map<std::thread::id, CommandExecution> command_executions;
         struct SendAudit {
@@ -893,13 +947,26 @@ namespace linkerbot::hand::runtime {
                     state->sent_result = ::linkerbot::hand::detail::checked_value(
                                              state->receipt, "missing runtime state: state->receipt")
                                              .result();
+                    if (!state->response_deadline_armed) {
+                        if (const auto response_deadline = state->receipt_response_deadline()) {
+                            state->response_window_expiry = *response_deadline <= state->deadline;
+                            state->deadline = std::min(state->deadline, *response_deadline);
+                            state->response_deadline_armed = true;
+                        }
+                    }
                     state->cv.notify_all();
                 }
-                if (state->external.cancelled() || state->poll_cancel.cancelled() || state->abort.token().cancelled()) {
+                if (state->generation_valid && !state->generation_valid()) {
+                    finish_locked(state, std::make_exception_ptr(ClosedError("read generation ended")), true);
+                } else if (state->external.cancelled() || state->poll_cancel.cancelled() ||
+                           state->abort.token().cancelled()) {
                     finish_locked(state, std::make_exception_ptr(CancelledError("device request cancelled")), true);
-                } else if (Clock::now() >= state->deadline) {
-                    finish_locked(
-                        state, std::make_exception_ptr(state->timeout_error("device request deadline expired")), true);
+                } else if (Clock::now() >= state->deadline &&
+                           !(state->plan.response_window && state->response_window_expiry &&
+                             (state->response || state->buffered_error) && state->receipt &&
+                             ::linkerbot::hand::detail::checked_value(state->receipt, "missing response receipt")
+                                 .completed())) {
+                    finish_locked(state, state->timeout_exception("device request deadline expired"), true);
                 } else if (state->receipt && ::linkerbot::hand::detail::checked_value(
                                                  state->receipt, "missing runtime state: state->receipt")
                                                  .completed()) {
@@ -909,6 +976,8 @@ namespace linkerbot::hand::runtime {
                     if (result.error) {
                         finish_locked(state, classify_exception(result.error, state->context, ErrorCode::kTransport),
                                       true);
+                    } else if (state->buffered_error) {
+                        finish_locked(state, state->buffered_error, state->buffered_isolation);
                     } else if (state->response) {
                         finish_locked(state);
                     } else if (!state->plan.consume) {
@@ -968,12 +1037,38 @@ namespace linkerbot::hand::runtime {
             bool matched = false;
             const auto requests = pending;
             for (const auto &state : requests) {
-                if (!state->plan.consume || state->response || input.received_at >= state->deadline ||
+                if (!state->plan.consume || input.received_at >= state->deadline ||
                     input.received_at < state->receipt->result().accepted_at) {
                     continue;
                 }
+                if (state->response || state->buffered_error) {
+                    if (state->plan.defer_errors_until_send) {
+                        // This request still owns its response domain while the
+                        // send is pending. Matching frames are not reports.
+                        try {
+                            if (state->plan.consume(input.message).kind != protocol::ProgressKind::unmatched) {
+                                matched = true;
+                                break;
+                            }
+                        } catch (...) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 try {
+                    if (const auto error = state->expired_response(Clock::now())) {
+                        matched = true;
+                        finish_locked(state, error, true);
+                        break;
+                    }
                     auto progress = state->plan.consume(input.message);
+                    if (const auto error = state->expired_response(Clock::now())) {
+                        matched = true;
+                        finish_locked(state, error, true);
+                        break;
+                    }
                     if (progress.kind == protocol::ProgressKind::unmatched) {
                         continue;
                     }
@@ -994,18 +1089,23 @@ namespace linkerbot::hand::runtime {
                                       health.device_generation, ++domain_sequences[update.first],
                                       progress.origin,          state->receipt->result().accepted_at,
                                       state->generation,        input.sequence};
-                        if (state->scoped_command) {
+                        if (state->scoped_command ||
+                            (state->plan.defer_errors_until_send && state->plan.publish_after_send)) {
                             state->deferred_updates.emplace_back(update.first, std::move(sample));
                         } else {
                             publish_locked(update.first, std::move(sample));
                         }
                     }
                     if (progress.kind == protocol::ProgressKind::failed) {
-                        finish_locked(state,
-                                      progress.error
-                                          ? progress.error
-                                          : std::make_exception_ptr(ProtocolError("protocol response failed")),
-                                      !progress.terminal_error);
+                        auto error = progress.error
+                                         ? progress.error
+                                         : std::make_exception_ptr(ProtocolError("protocol response failed"));
+                        if (state->plan.defer_errors_until_send && state->receipt && !state->receipt->completed()) {
+                            state->buffered_error = error;
+                            state->buffered_isolation = !progress.terminal_error;
+                        } else {
+                            finish_locked(state, error, !progress.terminal_error);
+                        }
                         break;
                     }
                     if (progress.kind == protocol::ProgressKind::complete) {
@@ -1024,7 +1124,11 @@ namespace linkerbot::hand::runtime {
                     break;
                 } catch (...) {
                     matched = true;
-                    finish_locked(state, std::current_exception(), true);
+                    if (state->plan.defer_errors_until_send && state->receipt && !state->receipt->completed()) {
+                        state->buffered_error = std::current_exception();
+                    } else {
+                        finish_locked(state, std::current_exception(), true);
+                    }
                     break;
                 }
             }
@@ -1135,6 +1239,8 @@ namespace linkerbot::hand::runtime {
                     }
                     reap_locked();
                     if (input) {
+                        last_endpoint_receive = Clock::now();
+                        cv.notify_all();
                         consume_locked(*input);
                     }
                     reap_locked();
@@ -1281,6 +1387,18 @@ namespace linkerbot::hand::runtime {
         }
     }
     Request DeviceRuntime::submit(TransactionPlan plan, Deadline deadline, CancellationToken cancellation) {
+        std::function<bool()> generation_valid;
+        if (const auto policy = response_policies.find(this); policy != response_policies.end()) {
+            generation_valid = policy->second.generation_valid;
+            if (generation_valid && !generation_valid()) {
+                throw ClosedError("read generation ended before submission");
+            }
+            plan = policy->second.transform(std::move(plan));
+            deadline = policy->second.deadline;
+        }
+        if (plan.response_window && (plan.response_window->count() <= 0 || !plan.consume)) {
+            throw ValidationError("required response window needs a decoder and positive duration");
+        }
         if (plan.frames.empty()) {
             throw ValidationError("transaction plan must contain frames");
         }
@@ -1294,6 +1412,8 @@ namespace linkerbot::hand::runtime {
         state->plan = std::move(plan);
         state->deadline = deadline;
         state->external = cancellation;
+        state->generation_valid = std::move(generation_valid);
+        state->scoped_response_policy = response_policies.count(this) != 0;
         state->owner = std::this_thread::get_id();
         auto &p = *impl_;
         {
@@ -1331,6 +1451,9 @@ namespace linkerbot::hand::runtime {
             }
             for (;;) {
                 p.require_ready();
+                if (state->generation_valid && !state->generation_valid()) {
+                    throw ClosedError("read generation ended waiting for the transaction lane");
+                }
                 if (state->external.cancelled() || state->poll_cancel.cancelled()) {
                     throw LifecycleError("device request cancelled", state->context);
                 }
@@ -1390,9 +1513,7 @@ namespace linkerbot::hand::runtime {
                     if (auto request = weak_state.lock()) {
                         std::lock_guard<std::mutex> guard(runtime->impl_->mutex);
                         runtime->impl_->finish_locked(
-                            request,
-                            std::make_exception_ptr(request->timeout_error("device request wait deadline expired")),
-                            true);
+                            request, request->timeout_exception("device request wait deadline expired"), true);
                     }
                 }
             };
@@ -1429,6 +1550,9 @@ namespace linkerbot::hand::runtime {
             p.pending.push_back(state); // registered before physical send or receipt
             p.health.in_flight = p.pending.size();
             try {
+                if (state->generation_valid && !state->generation_valid()) {
+                    throw ClosedError("read generation ended before physical admission");
+                }
                 transport::SendOptions options;
                 options.deadline = deadline;
                 options.cancellation = state->abort.token();
@@ -1443,8 +1567,15 @@ namespace linkerbot::hand::runtime {
                      ::linkerbot::hand::detail::checked_value(state->receipt, "missing runtime state: state->receipt"),
                      std::move(send_observer), final_send});
                 if (const auto execution = p.command_executions.find(state->owner);
-                    execution != p.command_executions.end() && execution->second.accepted_send) {
-                    execution->second.accepted_send();
+                    execution != p.command_executions.end()) {
+                    if (execution->second.receipt_accepted) {
+                        execution->second.receipt_accepted(
+                            ::linkerbot::hand::detail::checked_value(state->receipt, "missing accepted receipt"),
+                            final_send);
+                    }
+                    if (execution->second.accepted_send) {
+                        execution->second.accepted_send();
+                    }
                 }
                 p.reap_locked();
             } catch (...) {
@@ -1462,7 +1593,7 @@ namespace linkerbot::hand::runtime {
             }
         }
         auto request = submit(std::move(plan), deadline, cancellation);
-        auto sample = request.wait_until(deadline);
+        auto sample = response_policies.count(this) ? request.wait() : request.wait_until(deadline);
         if (sample.origin != protocol::Origin::unknown) {
             last_response[this] = {weak_from_this(), sample};
         }
@@ -1637,6 +1768,9 @@ namespace linkerbot::hand::runtime {
         }
     }
     DeviceRuntime::Operation DeviceRuntime::operation(Deadline deadline, CancellationToken cancellation) {
+        if (const auto policy = response_policies.find(this); policy != response_policies.end()) {
+            deadline = policy->second.deadline;
+        }
         auto &p = *impl_;
         std::unique_lock<std::mutex> lock(p.mutex);
         const auto owner = std::this_thread::get_id();
@@ -1654,6 +1788,11 @@ namespace linkerbot::hand::runtime {
         }
         for (;;) {
             p.require_ready();
+            if (const auto policy = response_policies.find(this); policy != response_policies.end() &&
+                                                                  policy->second.generation_valid &&
+                                                                  !policy->second.generation_valid()) {
+                throw ClosedError("read generation ended waiting for an operation");
+            }
             if (cancellation.cancelled() || (current_poller == &p && current_poll_cancel.cancelled())) {
                 throw LifecycleError("device operation cancelled", p.error_context("runtime.operation"));
             }
@@ -1691,6 +1830,9 @@ namespace linkerbot::hand::runtime {
     }
     DeviceRuntime::Operation DeviceRuntime::operation(std::string name, Deadline deadline,
                                                       CancellationToken cancellation) {
+        if (const auto policy = response_policies.find(this); policy != response_policies.end()) {
+            deadline = policy->second.deadline;
+        }
         if (name.empty()) {
             return operation(deadline, cancellation);
         }
@@ -1711,6 +1853,11 @@ namespace linkerbot::hand::runtime {
         }
         for (;;) {
             p.require_ready();
+            if (const auto policy = response_policies.find(this); policy != response_policies.end() &&
+                                                                  policy->second.generation_valid &&
+                                                                  !policy->second.generation_valid()) {
+                throw ClosedError("read generation ended waiting for an operation");
+            }
             if (cancellation.cancelled() || (current_poller == &p && current_poll_cancel.cancelled())) {
                 throw LifecycleError("named device operation cancelled", p.error_context("runtime.operation", name));
             }
@@ -2031,6 +2178,11 @@ namespace linkerbot::hand::runtime {
         std::unique_lock<std::mutex> lock(p.mutex);
         for (;;) {
             p.require_ready();
+            if (const auto policy = response_policies.find(this); policy != response_policies.end() &&
+                                                                  policy->second.generation_valid &&
+                                                                  !policy->second.generation_valid()) {
+                throw ClosedError("read generation ended waiting for an operation");
+            }
             if (cancellation.cancelled() || (current_poller == &p && current_poll_cancel.cancelled())) {
                 throw LifecycleError("runtime wait cancelled", p.error_context("runtime.wait"));
             }
@@ -2089,6 +2241,7 @@ namespace linkerbot::hand::runtime {
         uint64_t reconnect_count = 0;
         std::optional<HealthTimePoint> last_successful_send;
         std::optional<HealthTimePoint> last_successful_receive;
+        Deadline last_endpoint_receive{};
         std::optional<HealthTimePoint> last_successful_transaction;
         const auto captured_at = HealthClock::now();
         {
@@ -2519,7 +2672,7 @@ void linkerbot::hand::unified_detail::RuntimeAccess::set_polling_gate(runtime::D
 void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(
     runtime::DeviceRuntime &runtime, runtime::Deadline deadline, bool send_only, SendObserver observer,
     FinalSend final_send, runtime::CancellationToken cancellation, const std::function<void()> &execute,
-    std::function<void()> prepare_send, std::function<void()> accepted_send) {
+    std::function<void()> prepare_send, std::function<void()> accepted_send, ReceiptAccepted receipt_accepted) {
     struct SendCallbacks {
         SendObserver &observer;
         FinalSend &final_send;
@@ -2540,7 +2693,7 @@ void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(
                                               runtime::DeviceRuntime::Impl::CommandExecution{
                                                   send_only, deadline, cancellation, std::move(callbacks.observer),
                                                   std::move(callbacks.final_send), std::move(callbacks.prepare_send),
-                                                  std::move(callbacks.accepted_send)});
+                                                  std::move(callbacks.accepted_send), std::move(receipt_accepted)});
     }
     const auto restore = [&] {
         const std::lock_guard<std::mutex> lock(p.mutex);
@@ -2558,4 +2711,81 @@ void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(
         throw;
     }
     restore();
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::with_response_windows(runtime::DeviceRuntime &runtime,
+                                                                           PlanTransform transform,
+                                                                           const std::function<void()> &execute,
+                                                                           runtime::Deadline execution_deadline,
+                                                                           std::function<bool()> generation_valid) {
+    auto previous = runtime::response_policies.extract(&runtime);
+    try {
+        runtime::response_policies.emplace(
+            &runtime, runtime::ResponsePolicy{std::move(transform), execution_deadline, std::move(generation_valid)});
+    } catch (...) {
+        if (!previous.empty()) {
+            runtime::response_policies.insert(std::move(previous));
+        }
+        throw;
+    }
+    const auto restore = [&] {
+        runtime::response_policies.erase(&runtime);
+        if (!previous.empty()) {
+            runtime::response_policies.insert(std::move(previous));
+        }
+    };
+    try {
+        execute();
+    } catch (...) {
+        restore();
+        throw;
+    }
+    restore();
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::wait_endpoint_quiet(runtime::DeviceRuntime &runtime,
+                                                                         std::chrono::milliseconds quiet,
+                                                                         runtime::Deadline deadline,
+                                                                         const std::function<bool()> &cancelled) {
+    auto &p = *runtime.impl_;
+    std::unique_lock<std::mutex> lock(p.mutex);
+    auto last = runtime::Clock::now();
+    while (true) {
+        last = std::max(last, p.last_endpoint_receive);
+        if (cancelled()) {
+            throw ClosedError("recovery ended during quiet period");
+        }
+        if (runtime::Clock::now() >= deadline) {
+            throw TimeoutError("recovery execution deadline expired during quiet period");
+        }
+        if (runtime::Clock::now() - last >= quiet) {
+            return;
+        }
+        p.cv.wait_until(lock, std::min({deadline, last + quiet, runtime::Clock::now() + std::chrono::milliseconds{1}}));
+    }
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::flush_sends(runtime::DeviceRuntime &runtime) {
+    const std::lock_guard<std::mutex> lock(runtime.impl_->mutex);
+    runtime.impl_->reap_sends_locked();
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::drain_sends(runtime::DeviceRuntime &runtime,
+                                                                 runtime::Deadline deadline) {
+    auto &p = *runtime.impl_;
+    std::unique_lock<std::mutex> lock(p.mutex);
+    while (true) {
+        p.reap_sends_locked();
+        if (p.send_audit.empty()) {
+            return;
+        }
+        if (runtime::Clock::now() >= deadline) {
+            throw TimeoutError("recovery preparation did not drain sends before its deadline");
+        }
+        p.cv.wait_until(lock, std::min(deadline, runtime::Clock::now() + std::chrono::milliseconds{1}));
+    }
+}
+
+bool linkerbot::hand::unified_detail::RuntimeAccess::uses_response_windows(const runtime::DeviceRuntime &runtime) {
+    return runtime::response_policies.count(&runtime) != 0;
 }

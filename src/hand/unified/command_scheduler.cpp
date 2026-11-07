@@ -97,12 +97,13 @@ namespace linkerbot::hand::unified_detail {
         }
     }
 
-    CommandScheduler::CommandScheduler(double rate_hz, size_t capacity, Now now)
-        : CommandScheduler(ConstructorTag{}, ConstructorArguments{rate_hz, capacity, std::move(now)}) {}
+    CommandScheduler::CommandScheduler(double rate_hz, size_t capacity, Now now, bool python_behavior)
+        : CommandScheduler(ConstructorTag{}, ConstructorArguments{rate_hz, capacity, std::move(now), python_behavior}) {
+    }
 
     CommandScheduler::CommandScheduler(ConstructorTag, ConstructorArguments arguments)
         : interval_(interval(arguments.rate_hz)), capacity_(arguments.capacity),
-          manual_clock_(static_cast<bool>(arguments.now)),
+          manual_clock_(static_cast<bool>(arguments.now)), python_behavior_(arguments.python_behavior),
           now_(arguments.now ? std::move(arguments.now) : Now{[] { return Clock::now(); }}) {
         if (!arguments.capacity) {
             throw ValidationError("discrete_queue_capacity must be positive");
@@ -156,9 +157,12 @@ namespace linkerbot::hand::unified_detail {
         }
         CommandHandle handle(next_id_, family, support, request.ack_expectation, now);
         Job job{std::move(request), handle, std::move(context), now, {}, std::move(execute)};
-        job.deadline = now + job.request.timeout;
+        job.deadline = python_behavior_ ? Clock::time_point::max() : now + job.request.timeout;
         job.request.deadline = job.deadline;
         job.request.completion = handle;
+        if (python_behavior_) {
+            job.request.delivery = std::make_shared<CommandDelivery>();
+        }
         job.request.cancellation = job.cancellation.token();
         job.request.dispatched = [this, handle, family](uint64_t frames, Clock::time_point timestamp) mutable {
             const std::lock_guard<std::mutex> lock(mutex_);
@@ -272,6 +276,10 @@ namespace linkerbot::hand::unified_detail {
 
     void CommandScheduler::invalidate(std::exception_ptr error) {
         const std::lock_guard<std::mutex> lock(mutex_);
+        ++invalidation_;
+        if (preparing_) {
+            preparing_->cancel();
+        }
         for (auto &job : fifo_) {
             fail(job, error);
             removed(job, true);
@@ -282,7 +290,9 @@ namespace linkerbot::hand::unified_detail {
         }
         fifo_.clear();
         latest_.clear();
-        if (active_ && !active_->handle.done()) {
+        if (active_ && !active_->handle.done() &&
+            !(python_behavior_ && active_->request.ack_expectation == AckExpectation::kNone &&
+              active_->request.delivery && active_->request.delivery->preserve_claimed())) {
             fail(*active_, error);
             --metrics_.at(active_->handle.family()).value.pending;
         }
@@ -319,6 +329,45 @@ namespace linkerbot::hand::unified_detail {
                 }
                 continue;
             }
+            // Claim a target only after the device transaction lane is available.
+            // Until then latest replacement and FIFO capacity still apply to it.
+            std::shared_ptr<void> execution_lease;
+            if (python_behavior_) {
+                const auto &candidate = fifo_.empty() ? latest_.begin()->second : fifo_.front();
+                const auto prepare = candidate.request.prepare_execution;
+                if (prepare) {
+                    const auto epoch = invalidation_;
+                    preparing_.emplace();
+                    const auto cancellation = preparing_->token();
+                    lock.unlock();
+                    std::exception_ptr error;
+                    try {
+                        execution_lease = prepare(cancellation);
+                    } catch (...) {
+                        error = std::current_exception();
+                    }
+                    lock.lock();
+                    preparing_.reset();
+                    if (epoch != invalidation_ || stop_ || !pending_size()) {
+                        continue;
+                    }
+                    if (error) {
+                        for (auto &queued : fifo_) {
+                            fail(queued, error);
+                            removed(queued, true);
+                        }
+                        for (auto &[family, queued] : latest_) {
+                            (void)family;
+                            fail(queued, error);
+                            removed(queued, true);
+                        }
+                        fifo_.clear();
+                        latest_.clear();
+                        continue;
+                    }
+                    now = now_();
+                }
+            }
             auto selected = latest_.end();
             auto sequence = fifo_.empty() ? std::numeric_limits<uint64_t>::max() : fifo_.front().handle.command_id();
             for (auto it = latest_.begin(); it != latest_.end(); ++it) {
@@ -334,6 +383,7 @@ namespace linkerbot::hand::unified_detail {
             } else {
                 fifo_.pop_front();
             }
+            job.request.execution_lease = std::move(execution_lease);
             removed(job, false);
             auto &m = metrics_.at(job.handle.family());
             sample(m.queue_times, now - job.accepted);
@@ -344,7 +394,9 @@ namespace linkerbot::hand::unified_detail {
             try {
                 // The absolute admission deadline also travels with the request;
                 // this rounded duration is only for native API compatibility.
-                job.request.timeout = runtime::remaining(job.deadline);
+                if (!python_behavior_) {
+                    job.request.timeout = runtime::remaining(job.deadline);
+                }
                 result = job.execute(job.request);
             } catch (...) {
                 error = classify_exception(std::current_exception(), job.context, ErrorCode::kInternal);
@@ -352,7 +404,9 @@ namespace linkerbot::hand::unified_detail {
             lock.lock();
             // Leave a full interval after completion as well. Arbitration may
             // delay the physical start; this prevents catch-up bursts thereafter.
-            next_start_ = now_() + interval_;
+            if (!python_behavior_) {
+                next_start_ = now_() + interval_;
+            }
             sample(m.execution_times, now_() - now);
             if (!job.handle.done()) {
                 --m.value.pending;

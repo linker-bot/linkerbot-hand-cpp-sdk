@@ -63,10 +63,9 @@ Still required before replacing the accepted Python implementation:
 
 - A pinned business configuration and same-input cross-language acceptance
   corpus for every deployed model, unit/range boundary and fault response.
-- An explicit policy for admission-to-completion versus per-response timeout,
-  strict malformed-response handling, close/in-flight completion, adaptive
-  feedback, automatic reconnect and recovery quiet windows. Existing C++
-  defaults are retained rather than labeled Python-equivalent.
+- Deployed-configuration acceptance for the opt-in transaction policy below,
+  plus adaptive feedback and automatic reconnect parity. Native defaults remain
+  separate from the Python policy; passing offline cases is not complete parity.
 - A Python binding proving receipt retention on allocation/wrapping failure,
   GIL/callback/destructor/interpreter-exit safety, exception conversion and
   wall-clock timestamp conversion. Native steady timestamps are not Unix time.
@@ -89,3 +88,36 @@ Classic protocol constructors explicitly select classic CAN, including when thei
 The new cache uses local successful-open/recovery generations and a monotonic cache revision. These are independent of the retained native-generation policy of `get_snapshot()` and health. Bindings must not mix the two policies without explicit mapping. Physical Session/transport loss or a changed physical generation invalidates the retained cache until this device successfully initializes again. Legacy facade readiness/health policies remain separate. Repeated reads do not advance the revision without a visible change. Existing `get_snapshot()` still requires Ready. Feedback-filtered waiting and full per-channel Python sequence parity remain outside this patch.
 
 Unified polling accepts measured speeds on L20Lite/L20/L30/O30 and voltages on O30. V25 torque-limit and motion-time freshness is 100 ms and 300 ms; equality at the threshold is still fresh. Mounted V36 defaults are unchanged. These capabilities use the existing native polling and Session transmitter; no Python send scheduler is introduced. Hand 0.3.5 retains the explicit transport 0.3.4 minimum independently of the hand patch number.
+
+## Second compatibility patch (0.3.6)
+
+Set `runtime_behavior = RuntimeBehavior::kPython` explicitly. This policy supports Classic L6, O6, L20Lite, L20, L30 and `O30Layout::kPythonV25`. Other native protocol selections keep their default policy; an incompatible explicit combination is rejected before transport construction. Discovery carries the same runtime fields. There is no Python binding or hand/arm integration in this patch.
+
+Each device coordinates equivalent active reads, identity refreshes and polls. `read_waiter_capacity` defaults to 256 active callers; polls do not consume this capacity. Each active read keeps its own absolute caller deadline. Leaving a wait does not cancel a shared transaction. Unclaimed work with no remaining reader or poll demand is discarded; polling demand survives its internal wait timeout until the poll is cancelled. A caller arriving after publication needs a subsequent sample. Closing or recovering invalidates old waiters and prevents their results from serving a new generation. This is a device intent coordinator; the existing Session owns physical sending. Pending latest setters remain replaceable while another read owns the transaction lane.
+
+In this policy, setter admission does not start a response timer. Required response windows start at the physical batch receipt, and chained operations have separate stage windows. `response_timeout = std::nullopt` uses ordinary protocol windows; an explicit positive value overrides them. Identity uses `identity_timeout` independently, matching the Python initializer and refresh path. Its native default remains 1000 ms; explicitly use 200 ms to match the pinned Python default. Neither setting changes getter caller waits. Legacy Manager wait deadlines do not shorten the selected response-window policy. Classic identity sends C0/C1/C2/C4 in one batch with 5 ms gaps and one response window. Matching malformed responses fail with `ProtocolError`; unrelated frames remain unmatched. A sent request exhausting its required response window raises `ResponseTimeoutError`, a `TimeoutError` subtype. Failure retains successful cache evidence and fences late replies for the protocol guard. An early reply or error cannot precede the physical delivery decision. Native absolute timeout behavior remains the default.
+
+Close rejects unclaimed work with `ClosedError`. A claimed dispatch-only batch may finish `Dispatched` after close starts, according to its actual physical receipt. Failed physical delivery remains failure. A command requiring an ACK fails closed when its generation ends; delivery alone cannot acknowledge it. Handle receipts remain available and old commands are never replayed. A C++ handle wait timeout still returns `false`; a future Python binding must translate that result to Python's `TimeoutError`.
+
+`recover_for(timeout)` separates a caller's wait from the shared recovery execution. Concurrent callers join the running cycle. Preparation must drain within the first caller's preparation budget and `shutdown_timeout`; failed preparation cannot later reconnect. Once recovery starts, a caller timeout does not cancel it. `recovery_timeout` defaults to 5 s; `recovery_attempts` remains the existing explicit setting (native default 1, set 3 to match Python's default retry count). `recovery_quiet` defaults to 200 ms. Only response-window loss permits another initialization attempt. Quiet time is at least the failed stage's response window and late guard, and endpoint traffic restarts it without extending the total execution deadline. Initialization retries reuse the recovered transport. Identity, protocol, transport and total-budget failures stop the cycle. A subsequent explicit recovery can restore Ready from Faulted after identity and baseline verification; polling is restored only after initialization. No targets or discrete commands are replayed.
+
+Configure capacity, command rate, protocol layout and timeout overrides from the accepted business configuration rather than inferring them from this policy name. Automatic reconnect, adaptive feedback equivalence, per-channel sequence mapping, Python allocation/GIL/exit behavior and deployed hardware acceptance remain separate work. The source pin above is a comparison reference, not evidence that the deployed Python build used that exact commit.
+
+For example, these explicit runtime fields match the pinned reference defaults;
+confirm the deployed business configuration before using them:
+
+```cpp
+using namespace linkerbot::hand;
+using namespace std::chrono_literals;
+HandRuntimeConfig runtime;
+runtime.runtime_behavior = RuntimeBehavior::kPython;
+runtime.command_rate_hz = 250.0;
+runtime.discrete_queue_capacity = 16;
+runtime.read_waiter_capacity = 256;
+runtime.identity_timeout = 200ms;
+runtime.response_timeout = std::nullopt;
+runtime.shutdown_timeout = 2s;
+runtime.recovery_attempts = 3;
+runtime.recovery_timeout = 5s;
+runtime.recovery_quiet = 200ms;
+```

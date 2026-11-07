@@ -2,6 +2,11 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.6
+
+- 新增显式 Python 运行时策略，覆盖读取合并、发送后的响应窗口、匹配响应校验、关闭终态及有界显式恢复。
+- 保留原生默认行为及 transport v0.3.4 最低依赖，需要重新编译消费者。验证范围见 [发行说明](RELEASE_NOTES.md) 和 [行为基准](docs/zh/guides/python-behavior-baseline.md)。
+
 ## 0.3.5
 
 - 补齐统一实测速度、电压轮询，修正 O30 V25 过期阈值，新增不撤销命令的身份刷新和全生命周期可读缓存。

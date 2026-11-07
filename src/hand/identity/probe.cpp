@@ -1,7 +1,10 @@
 #include "probe.hpp"
+#include "../unified/detail/python_identity.hpp"
+#include "../unified/detail/runtime_access.hpp"
 
 #include <algorithm>
 #include <any>
+#include <array>
 #include <optional>
 #include <string>
 #include <utility>
@@ -83,6 +86,60 @@ namespace linkerbot::hand::identity_probe {
             }
 
             auto operation = runtime->operation("identity.classic", deadline);
+            if (unified_detail::RuntimeAccess::uses_response_windows(*runtime)) {
+                std::array<protocol::TransactionPlan, 4> parts{
+                    serial_plan(target.request_id), pcb_plan(target.request_id), firmware_plan(target.request_id),
+                    mechanical_plan(target.request_id)};
+                parts[0].consume = unified_detail::python_serial(target.request_id, target.model);
+                protocol::TransactionPlan batch;
+                batch.domain = "version.identity";
+                batch.gap = std::chrono::milliseconds{5};
+                for (const auto &part : parts) {
+                    batch.frames.insert(batch.frames.end(), part.frames.begin(), part.frames.end());
+                    batch.keys.insert(batch.keys.end(), part.keys.begin(), part.keys.end());
+                }
+                batch.consume = [parts = std::move(parts),
+                                 values = std::array<std::any, 4>{}](const can::Message &message) mutable {
+                    bool matched = false;
+                    for (size_t i = 0; i < parts.size(); ++i) {
+                        auto progress = parts[i].consume(message);
+                        if (progress.kind == protocol::ProgressKind::failed) {
+                            return progress;
+                        }
+                        matched = matched || progress.kind != protocol::ProgressKind::unmatched;
+                        if (i == 0 && progress.kind == protocol::ProgressKind::pending) {
+                            values[0].reset();
+                        }
+                        if (progress.kind == protocol::ProgressKind::complete) {
+                            if (values[i].has_value()) {
+                                const bool conflict = i == 0 ? std::any_cast<std::string>(values[i]) !=
+                                                                   std::any_cast<std::string>(progress.value)
+                                                             : std::any_cast<Version>(values[i]).to_string() !=
+                                                                   std::any_cast<Version>(progress.value).to_string();
+                                if (conflict) {
+                                    throw ProtocolError("identity response conflicts with a duplicate");
+                                }
+                            }
+                            values[i] = std::move(progress.value);
+                        }
+                    }
+                    if (std::all_of(values.begin(), values.end(),
+                                    [](const auto &value) { return value.has_value(); })) {
+                        // Progress owns the std::any payload; lifecycle regressions
+                        // exercise destruction of the complete identity result.
+                        // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
+                        return protocol::Progress::complete(values);
+                    }
+                    return matched ? protocol::Progress::pending() : protocol::Progress::unmatched();
+                };
+                const auto values = runtime->query<std::array<std::any, 4>>(std::move(batch), deadline);
+                const auto pcb = std::any_cast<Version>(values[1]);
+                const auto firmware = std::any_cast<Version>(values[2]);
+                const auto mechanical = std::any_cast<Version>(values[3]);
+                return classic_identity(target, rule, std::any_cast<std::string>(values[0]),
+                                        ClassicVersions{pcb, firmware, mechanical},
+                                        runtime->response_provenance().received_at);
+            }
             auto product_code = runtime->query<std::string>(serial_plan(target.request_id), deadline);
             const auto pcb = runtime->query<Version>(pcb_plan(target.request_id), deadline);
             const auto firmware = runtime->query<Version>(firmware_plan(target.request_id), deadline);

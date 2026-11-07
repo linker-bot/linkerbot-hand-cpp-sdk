@@ -1,5 +1,7 @@
 #include "detail/backend.hpp"
 #include "detail/o30_v25.hpp"
+#include "detail/python_transactions.hpp"
+#include "detail/read_coordinator.hpp"
 
 #include "detail/command_handle_access.hpp"
 #include "detail/dispatch_guard.hpp"
@@ -11,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <type_traits>
@@ -73,12 +76,26 @@ namespace linkerbot::hand::unified_detail {
                 : config_(config), capabilities_(declared_capabilities(config)), device_(std::move(device)),
                   owned_session_(std::move(owned_session)), execution_gate_(std::make_shared<ExecutionGate>()),
                   dispatch_guard_(std::make_shared<DispatchGuard>()) {
+                if (config_.runtime_behavior == RuntimeBehavior::kPython) {
+                    reads_ = std::make_unique<ReadCoordinator<ReadValue>>(config_.read_waiter_capacity);
+                    return;
+                }
                 RuntimeAccess::set_polling_gate(*device_->runtime(), [gate = execution_gate_, guard = dispatch_guard_](
                                                                          runtime::CancellationToken token) {
                     auto lease = gate->acquire(false, runtime::Deadline::max(), token);
                     guard->wait(runtime::Deadline::max(), token);
                     return lease;
                 });
+            }
+
+            ~ModelBackend() override {
+                reads_closing_.store(true, std::memory_order_release);
+                ++read_epoch_;
+                if (reads_) {
+                    reads_->invalidate();
+                    device_->runtime()->cancel_all();
+                    reads_.reset();
+                }
             }
 
             [[nodiscard]] CommandHandle submit(const CommandRequest &request) override {
@@ -105,7 +122,9 @@ namespace linkerbot::hand::unified_detail {
                                   : capability->ack_support,
                               request.ack_expectation};
                 const auto deadline = request.deadline ? *request.deadline : runtime::deadline_after(request.timeout);
-                auto lease = execution_gate_->acquire(true, deadline, request.cancellation, request.generation_valid);
+                auto lease = request.execution_lease ? request.execution_lease
+                                                     : execution_gate_->acquire(true, deadline, request.cancellation,
+                                                                                request.generation_valid);
                 if (request.generation_valid && !request.generation_valid()) {
                     throw ClosedError("command generation ended before execution");
                 }
@@ -145,7 +164,8 @@ namespace linkerbot::hand::unified_detail {
                     command_detail::CommandHandleAccess::record_sent(handle, progress->sent);
                     if (!final_send || sent.outcome != transport::SendOutcome::dispatched || sent.error ||
                         !sent.completed_at || *sent.completed_at >= deadline || runtime::Clock::now() >= deadline ||
-                        (request.generation_valid && !request.generation_valid())) {
+                        (request.generation_valid && !request.generation_valid() &&
+                         !(request.delivery && request.delivery->preserved()))) {
                         return;
                     }
                     if (request.dispatched) {
@@ -183,29 +203,46 @@ namespace linkerbot::hand::unified_detail {
                 bounded.timeout = runtime::remaining(deadline);
                 CommandOutcome outcome;
                 try {
-                    RuntimeAccess::execute_command(
-                        *device_->runtime(), deadline, request.ack_expectation == AckExpectation::kNone,
-                        std::move(observe), std::move(final_send), request.cancellation,
-                        [&] {
-                            if (request.operation) {
-                                outcome = operate_device(*device_, *request.operation, bounded.timeout);
-                                return;
-                            }
-                            if constexpr (std::is_same_v<Device, o30::O30>) {
-                                if (config_.o30_layout == O30Layout::kPythonV25) {
-                                    outcome = submit_v25(*device_, bounded);
+                    with_windows([&] {
+                        RuntimeAccess::execute_command(
+                            *device_->runtime(), deadline, request.ack_expectation == AckExpectation::kNone,
+                            std::move(observe), std::move(final_send), request.cancellation,
+                            [&] {
+                                if (request.operation) {
+                                    outcome = operate_device(*device_, *request.operation, bounded.timeout);
                                     return;
                                 }
-                            }
-                            outcome = submit_command(*device_, bounded);
-                        },
-                        [handle]() mutable { command_detail::CommandHandleAccess::reserve_send_result(handle); },
-                        [guard = dispatch_guard_, settle] {
-                            if (settle.count() > 0) {
-                                guard->begin_send();
-                            }
-                        });
+                                if constexpr (std::is_same_v<Device, o30::O30>) {
+                                    if (config_.o30_layout == O30Layout::kPythonV25) {
+                                        outcome = submit_v25(*device_, bounded);
+                                        return;
+                                    }
+                                }
+                                outcome = submit_command(*device_, bounded);
+                            },
+                            [handle]() mutable { command_detail::CommandHandleAccess::reserve_send_result(handle); },
+                            [guard = dispatch_guard_, settle] {
+                                if (settle.count() > 0) {
+                                    guard->begin_send();
+                                }
+                            },
+                            [delivery = request.delivery](const transport::SendReceipt &receipt, bool final) {
+                                if (delivery) {
+                                    delivery->accepted(receipt, final);
+                                }
+                            });
+                    });
                 } catch (...) {
+                    if (request.delivery && request.ack_expectation == AckExpectation::kNone) {
+                        if (const auto receipt = request.delivery->retained()) {
+                            receipt->wait();
+                            RuntimeAccess::flush_sends(*device_->runtime());
+                            if (const auto error = receipt->result().error) {
+                                deactivate();
+                                rethrow_as_hand_error(error, {}, ErrorCode::kTransport);
+                            }
+                        }
+                    }
                     deactivate();
                     throw;
                 }
@@ -232,12 +269,74 @@ namespace linkerbot::hand::unified_detail {
             }
 
             [[nodiscard]] TelemetrySample read(TelemetrySemantic semantic, std::chrono::milliseconds timeout) override {
+                return coordinated_read(semantic, timeout, false);
+            }
+            [[nodiscard]] TelemetrySample coordinated_read(TelemetrySemantic semantic,
+                                                           std::chrono::milliseconds timeout, bool polling,
+                                                           runtime::CancellationToken poll_cancel = {}) {
                 if (!capabilities_.supports(semantic)) {
                     throw UnsupportedOperationError("telemetry semantic is not supported by this device");
                 }
-                const auto deadline = runtime::deadline_after(timeout);
-                auto lease = execution_gate_->acquire(false, deadline);
-                dispatch_guard_->wait(deadline, {});
+                if (reads_) {
+                    const auto *channel = capabilities_.telemetry_channel(semantic);
+                    if (channel && (channel->read_mode == ReadMode::kCommandCache ||
+                                    channel->read_mode == ReadMode::kCommandResponse)) {
+                        return read_telemetry(*device_, semantic, timeout);
+                    }
+                    std::optional<runtime::Deadline> baseline;
+                    try {
+                        const auto previous =
+                            telemetry_sample(snapshot(Model::kUnknown, HandSide::kUnknown, capabilities_), semantic);
+                        baseline = std::visit([](const auto &reading) { return reading.meta.collected_at; }, previous);
+                    } catch (const DeviceNotReadyError &) {
+                        baseline.reset();
+                    }
+                    const auto deadline = runtime::deadline_after(timeout);
+                    const auto valid = read_generation();
+                    while (true) {
+                        auto value = reads_->read_prepared(
+                            static_cast<unsigned>(semantic), deadline,
+                            [this, semantic, valid](const std::shared_ptr<void> &lane) {
+                                ReadValue result;
+                                with_windows(
+                                    [&] { result = read_direct(semantic, config_.transaction_timeout, valid, lane); },
+                                    valid);
+                                return result;
+                            },
+                            [this, valid](const std::function<bool()> &demand) {
+                                return execution_gate_->acquire(false, runtime::Deadline::max(), {},
+                                                                [valid, demand] { return valid() && demand(); });
+                            },
+                            polling, poll_cancel);
+                        auto sample = std::get<TelemetrySample>(std::move(value));
+                        const bool fresh = std::visit(
+                            [&](const auto &reading) {
+                                return reading.meta.collected_at &&
+                                       (!baseline || *reading.meta.collected_at > *baseline);
+                            },
+                            sample);
+                        if (fresh) {
+                            return sample;
+                        }
+                        // A caller joining after cache publication needs the next
+                        // transaction. Frames buffered before delivery can still
+                        // serve callers admitted before that publication.
+                    }
+                }
+                return read_direct(semantic, timeout);
+            }
+
+            [[nodiscard]] TelemetrySample read_direct(TelemetrySemantic semantic, std::chrono::milliseconds timeout,
+                                                      const std::function<bool()> &valid = {},
+                                                      const std::shared_ptr<void> &prepared = {}) {
+                if (!capabilities_.supports(semantic)) {
+                    throw UnsupportedOperationError("telemetry semantic is not supported by this device");
+                }
+                const auto deadline = config_.runtime_behavior == RuntimeBehavior::kPython
+                                          ? runtime::Deadline::max()
+                                          : runtime::deadline_after(timeout);
+                auto lease = prepared ? prepared : execution_gate_->acquire(false, deadline, {}, valid);
+                dispatch_guard_->wait(deadline, {}, valid);
                 if constexpr (std::is_same_v<Device, o30::O30>) {
                     if (config_.o30_layout == O30Layout::kPythonV25 && semantic != TelemetrySemantic::kForce &&
                         semantic != TelemetrySemantic::kForceFns) {
@@ -261,10 +360,13 @@ namespace linkerbot::hand::unified_detail {
                 CommandHandle handle{next_command_id(), CommandFamily::kDiscreteOperation,
                                      acknowledged ? AckSupport::kRequired : AckSupport::kUnsupported,
                                      acknowledged ? AckExpectation::kRequired : AckExpectation::kNone};
-                const auto deadline = runtime::deadline_after(timeout);
+                const auto deadline = config_.runtime_behavior == RuntimeBehavior::kPython
+                                          ? runtime::Deadline::max()
+                                          : runtime::deadline_after(timeout);
                 auto lease = execution_gate_->acquire(false, deadline);
                 dispatch_guard_->wait(deadline, {});
-                const auto outcome = operate_device(*device_, operation, runtime::remaining(deadline));
+                CommandOutcome outcome;
+                with_windows([&] { outcome = operate_device(*device_, operation, runtime::remaining(deadline)); });
                 command_detail::CommandHandleAccess::mark_dispatched(handle, outcome.sent_frames);
                 if (acknowledged) {
                     if (!outcome.acknowledged) {
@@ -354,13 +456,75 @@ namespace linkerbot::hand::unified_detail {
             }
 
             [[nodiscard]] DeviceIdentity verify_identity(HandSide side, std::chrono::milliseconds timeout) override {
-                const auto deadline = runtime::deadline_after(timeout);
-                auto lease = execution_gate_->acquire(false, deadline);
-                dispatch_guard_->wait(deadline, {});
+                if (reads_) {
+                    const auto valid = read_generation();
+                    auto value = reads_->read_prepared(
+                        std::numeric_limits<unsigned>::max(), runtime::deadline_after(timeout),
+                        [this, side, valid](const std::shared_ptr<void> &lane) {
+                            ReadValue result;
+                            with_windows([&] { result = identity_direct(side, config_.identity_timeout, valid, lane); },
+                                         valid, true);
+                            return result;
+                        },
+                        [this, valid](const std::function<bool()> &demand) {
+                            return execution_gate_->acquire(false, runtime::Deadline::max(), {},
+                                                            [valid, demand] { return valid() && demand(); });
+                        });
+                    return std::get<DeviceIdentity>(std::move(value));
+                }
+                return identity_direct(side, timeout);
+            }
+
+            [[nodiscard]] DeviceIdentity identity_direct(HandSide side, std::chrono::milliseconds timeout,
+                                                         const std::function<bool()> &valid = {},
+                                                         const std::shared_ptr<void> &prepared = {}) {
+                const auto deadline = config_.runtime_behavior == RuntimeBehavior::kPython
+                                          ? runtime::Deadline::max()
+                                          : runtime::deadline_after(timeout);
+                auto lease = prepared ? prepared : execution_gate_->acquire(false, deadline, {}, valid);
+                dispatch_guard_->wait(deadline, {}, valid);
                 return read_identity(*device_, side, runtime::remaining(deadline));
             }
 
+            TelemetrySample initialize_read(TelemetrySemantic semantic, std::chrono::milliseconds timeout) override {
+                TelemetrySample result;
+                with_windows([&] { result = read_direct(semantic, timeout); });
+                return result;
+            }
+            DeviceIdentity initialize_identity(HandSide side, std::chrono::milliseconds timeout) override {
+                DeviceIdentity result;
+                with_windows([&] { result = identity_direct(side, timeout); }, {}, true);
+                return result;
+            }
             void start_polling(const PollingPlan &plan) override {
+                if (reads_) {
+                    std::vector<runtime::DeviceRuntime::PollTask> tasks;
+                    for (const auto &channel : plan) {
+                        runtime::DeviceRuntime::PollTask task;
+                        task.name = python_polling_domain(channel.semantic);
+                        task.period = channel.interval;
+                        task.run = [this, semantic = channel.semantic](runtime::CancellationToken token) {
+                            try {
+                                (void)coordinated_read(semantic, config_.transaction_timeout, true, token);
+                            } catch (const TimeoutError &) {
+                                // A poll miss or caller wait expiry does not fault
+                                // unrelated channels or cancel shared readers.
+                                return;
+                            } catch (const ClosedError &) {
+                                // A previous read generation ended. Lifecycle code
+                                // owns poll shutdown/restart; do not fault peers.
+                                return;
+                            } catch (const ProtocolError &) {
+                                // The native transaction already recorded this
+                                // protocol failure and retained successful data.
+                                return;
+                            }
+                        };
+                        tasks.push_back(std::move(task));
+                    }
+                    device_->runtime()->start_polling(std::move(tasks));
+                    return;
+                }
                 if constexpr (std::is_same_v<Device, o30::O30>) {
                     if (config_.o30_layout == O30Layout::kPythonV25) {
                         std::vector<runtime::DeviceRuntime::PollTask> tasks;
@@ -374,7 +538,7 @@ namespace linkerbot::hand::unified_detail {
                             if (channel.semantic == TelemetrySemantic::kVoltages) {
                                 task.name = "voltages";
                             }
-                            task.run = [this, semantic = channel.semantic](runtime::CancellationToken) {
+                            task.run = [this, semantic = channel.semantic](runtime::CancellationToken token) {
                                 if (semantic == TelemetrySemantic::kForce || semantic == TelemetrySemantic::kForceFns) {
                                     (void)read_telemetry(*device_, semantic, std::chrono::milliseconds{1000});
                                 } else {
@@ -391,10 +555,45 @@ namespace linkerbot::hand::unified_detail {
             }
 
             void assert_external_lifecycle() const override { device_->runtime()->assert_external_lifecycle(); }
-            void cancel_commands() override { device_->runtime()->cancel_all(); }
+            void cancel_commands() override {
+                ++read_epoch_;
+                device_->runtime()->cancel_all();
+            }
             void stop_polling() override { device_->stop_polling(); }
-            void recover() override { recover_device(*device_); }
+            void wait_quiet(std::chrono::milliseconds quiet, runtime::Deadline deadline,
+                            const std::function<bool()> &cancelled) override {
+                RuntimeAccess::wait_endpoint_quiet(*device_->runtime(), quiet, deadline, cancelled);
+            }
+            std::shared_ptr<void> prepare_command(runtime::CancellationToken cancellation,
+                                                  const std::function<bool()> &valid) override {
+                return execution_gate_->acquire(true, runtime::Deadline::max(), cancellation, valid);
+            }
+            void drain_sends(runtime::Deadline deadline) override {
+                RuntimeAccess::drain_sends(*device_->runtime(), deadline);
+            }
+            void set_execution_deadline(runtime::Deadline deadline) override {
+                execution_deadline_.store(deadline.time_since_epoch().count(), std::memory_order_release);
+            }
+            void recover() override {
+                ++read_epoch_;
+                if (reads_) {
+                    reads_->invalidate();
+                    device_->runtime()->cancel_all();
+                    reads_->drain();
+                }
+                recover_device(*device_);
+                if (reads_) {
+                    reads_->activate();
+                }
+            }
             void close() override {
+                reads_closing_.store(true, std::memory_order_release);
+                ++read_epoch_;
+                if (reads_) {
+                    reads_->invalidate();
+                    device_->runtime()->cancel_all();
+                    reads_->drain();
+                }
                 std::exception_ptr error;
                 try {
                     device_->stop();
@@ -416,12 +615,44 @@ namespace linkerbot::hand::unified_detail {
             }
 
         private:
+            using ReadValue = std::variant<TelemetrySample, DeviceIdentity>;
+            std::function<bool()> read_generation() {
+                const auto epoch = read_epoch_.load(std::memory_order_acquire);
+                return [this, epoch] {
+                    return !reads_closing_.load(std::memory_order_acquire) &&
+                           read_epoch_.load(std::memory_order_acquire) == epoch;
+                };
+            }
+            void with_windows(const std::function<void()> &execute, std::function<bool()> valid = {},
+                              bool identity = false) {
+                if (config_.runtime_behavior != RuntimeBehavior::kPython) {
+                    execute();
+                    return;
+                }
+                RuntimeAccess::with_response_windows(
+                    *device_->runtime(),
+                    [this, identity](runtime::TransactionPlan plan) {
+                        plan = python_transaction(std::move(plan), config_);
+                        if (identity && plan.consume) {
+                            plan.response_window = config_.identity_timeout;
+                        }
+                        return plan;
+                    },
+                    execute,
+                    runtime::Deadline{runtime::Clock::duration{execution_deadline_.load(std::memory_order_acquire)}},
+                    std::move(valid));
+            }
             HandDeviceConfig config_;
             DeviceCapabilities capabilities_;
             std::unique_ptr<Device> device_;
             std::shared_ptr<transport::Session> owned_session_;
             std::shared_ptr<ExecutionGate> execution_gate_;
             std::shared_ptr<DispatchGuard> dispatch_guard_;
+            std::unique_ptr<ReadCoordinator<ReadValue>> reads_;
+            std::atomic<uint64_t> read_epoch_{0};
+            std::atomic<bool> reads_closing_{false};
+            std::atomic<runtime::Clock::duration::rep> execution_deadline_{
+                runtime::Deadline::max().time_since_epoch().count()};
         };
 
         template <typename Device, size_t JointCount>

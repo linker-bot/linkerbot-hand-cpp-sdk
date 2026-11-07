@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <optional>
@@ -175,6 +176,22 @@ namespace linkerbot::hand {
     public:
         explicit TimeoutError(std::string message, ErrorContext context = {}, std::exception_ptr cause = {})
             : HandError(ErrorCode::kTimeout, std::move(message), std::move(context), std::move(cause)) {}
+    };
+
+    // A sent transaction exhausted its response window. Recovery may retry
+    // this category without retrying protocol errors or transport failures.
+    class ResponseTimeoutError : public TimeoutError {
+    public:
+        using TimeoutError::TimeoutError;
+        ResponseTimeoutError(std::string message, ErrorContext context, std::chrono::microseconds window,
+                             std::chrono::milliseconds guard)
+            : TimeoutError(std::move(message), std::move(context)), response_window_(window), late_guard_(guard) {}
+        [[nodiscard]] std::chrono::microseconds response_window() const noexcept { return response_window_; }
+        [[nodiscard]] std::chrono::milliseconds late_guard() const noexcept { return late_guard_; }
+
+    private:
+        std::chrono::microseconds response_window_{0};
+        std::chrono::milliseconds late_guard_{0};
     };
 
     class DeviceFaultError : public HandError {

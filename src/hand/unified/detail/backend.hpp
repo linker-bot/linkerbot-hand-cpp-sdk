@@ -1,5 +1,6 @@
 #pragma once
 
+#include "command_delivery.hpp"
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -23,6 +24,9 @@ namespace linkerbot::hand::unified_detail {
         std::function<void()> acknowledged;
         runtime::CancellationToken cancellation;
         std::optional<DeviceOperation> operation;
+        std::shared_ptr<CommandDelivery> delivery;
+        std::function<std::shared_ptr<void>(runtime::CancellationToken)> prepare_execution;
+        std::shared_ptr<void> execution_lease;
     };
 
     using TelemetrySample =
@@ -43,9 +47,21 @@ namespace linkerbot::hand::unified_detail {
                                                     const DeviceCapabilities &capabilities) const = 0;
         [[nodiscard]] virtual HandHealth health() const = 0;
         [[nodiscard]] virtual DeviceIdentity verify_identity(HandSide side, std::chrono::milliseconds timeout) = 0;
+        virtual TelemetrySample initialize_read(TelemetrySemantic semantic, std::chrono::milliseconds timeout) {
+            return read(semantic, timeout);
+        }
+        virtual DeviceIdentity initialize_identity(HandSide side, std::chrono::milliseconds timeout) {
+            return verify_identity(side, timeout);
+        }
         virtual void start_polling(const PollingPlan &plan) = 0;
         virtual void stop_polling() = 0;
         virtual void recover() = 0;
+        virtual void set_execution_deadline(runtime::Deadline deadline) = 0;
+        virtual void drain_sends(runtime::Deadline deadline) = 0;
+        virtual std::shared_ptr<void> prepare_command(runtime::CancellationToken cancellation,
+                                                      const std::function<bool()> &valid) = 0;
+        virtual void wait_quiet(std::chrono::milliseconds quiet, runtime::Deadline deadline,
+                                const std::function<bool()> &cancelled) = 0;
         virtual void close() = 0;
         virtual void cancel_commands() = 0;
         virtual void assert_external_lifecycle() const = 0;

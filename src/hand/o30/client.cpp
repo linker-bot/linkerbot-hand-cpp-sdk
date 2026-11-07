@@ -128,6 +128,9 @@ namespace linkerbot::hand::o30 {
                 bytes = runtime_->query<std::vector<uint8_t>>(
                     protocol::transaction(request_id_.load(), mi, si, edl, payload, rts, next_id), deadline);
             } catch (const TimeoutError &error) {
+                if (dynamic_cast<const ResponseTimeoutError *>(&error)) {
+                    throw;
+                }
                 throw TimeoutError("No O30 response received within " + std::to_string(timeout.count()) +
                                        "ms: " + error.what(),
                                    error.context(), std::current_exception());

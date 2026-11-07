@@ -12,6 +12,10 @@
 namespace linkerbot::hand {
     enum class O30Layout : uint8_t { kMountedV36, kPythonV25 };
 
+    // Opt-in runtime semantics for migration from the Python SDK. Native
+    // constructors and model Managers retain their existing behavior.
+    enum class RuntimeBehavior : uint8_t { kNative, kPython };
+
     enum class L6Protocol : uint8_t { kClassic, kHopV004 };
     // Runtime-only policies that may be supplied independently of a physical
     // endpoint. Discovery owns model, side, interface and address selection;
@@ -38,6 +42,12 @@ namespace linkerbot::hand {
         std::chrono::milliseconds recovery_backoff{100};
         O30Layout o30_layout = O30Layout::kMountedV36;
         bool empty_polling_plan_disables = false;
+        RuntimeBehavior runtime_behavior = RuntimeBehavior::kNative;
+        size_t read_waiter_capacity = 256;
+        // Python profile only: nullopt uses the protocol's response window.
+        std::optional<std::chrono::milliseconds> response_timeout;
+        std::chrono::milliseconds recovery_timeout{5000};
+        std::chrono::milliseconds recovery_quiet{200};
     };
 
     // Fully resolved input consumed by HandDevice. Direct construction fills
@@ -63,8 +73,9 @@ namespace linkerbot::hand {
         std::chrono::milliseconds polling_interval{100};
         std::optional<std::filesystem::path> angle_mapping_path;
 
-        // Total setter budget from admission, including queueing, sending and
-        // any required ACK. Caller handle wait timeouts are independent.
+        // Native policy: total setter budget from admission, including queueing,
+        // sending and any required ACK. The Python policy uses response_timeout
+        // or protocol windows instead. Handle wait timeouts remain independent.
         std::chrono::milliseconds command_timeout{100};
 
         // Bounds identity verification performed as part of open() and each
@@ -97,5 +108,11 @@ namespace linkerbot::hand {
         // Python whole-hand path; native Managers retain mounted V36 behavior.
         O30Layout o30_layout = O30Layout::kMountedV36;
         bool empty_polling_plan_disables = false;
+        RuntimeBehavior runtime_behavior = RuntimeBehavior::kNative;
+        size_t read_waiter_capacity = 256;
+        // Python profile only: nullopt uses the protocol's response window.
+        std::optional<std::chrono::milliseconds> response_timeout;
+        std::chrono::milliseconds recovery_timeout{5000};
+        std::chrono::milliseconds recovery_quiet{200};
     };
 } // namespace linkerbot::hand

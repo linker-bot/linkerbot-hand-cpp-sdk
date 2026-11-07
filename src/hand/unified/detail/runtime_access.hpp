@@ -9,7 +9,18 @@ namespace linkerbot::hand::unified_detail {
     public:
         using PollingGate = std::function<std::shared_ptr<void>(runtime::CancellationToken)>;
         static void set_polling_gate(runtime::DeviceRuntime &runtime, PollingGate gate);
+        static void wait_endpoint_quiet(runtime::DeviceRuntime &runtime, std::chrono::milliseconds quiet,
+                                        runtime::Deadline deadline, const std::function<bool()> &cancelled);
+        using PlanTransform = std::function<runtime::TransactionPlan(runtime::TransactionPlan)>;
+        static void with_response_windows(runtime::DeviceRuntime &runtime, PlanTransform transform,
+                                          const std::function<void()> &execute,
+                                          runtime::Deadline execution_deadline = runtime::Deadline::max(),
+                                          std::function<bool()> generation_valid = {});
         using SendObserver = std::function<void(const transport::SendResult &, bool)>;
+        using ReceiptAccepted = std::function<void(const transport::SendReceipt &, bool)>;
+        static void flush_sends(runtime::DeviceRuntime &runtime);
+        static void drain_sends(runtime::DeviceRuntime &runtime, runtime::Deadline deadline);
+        static bool uses_response_windows(const runtime::DeviceRuntime &runtime);
         using FinalSend = std::function<bool(const runtime::TransactionPlan &)>;
         // Scope only this caller's native transactions. Its absolute budget is
         // inherited by nested operations; receipt callbacks run under the
@@ -20,6 +31,7 @@ namespace linkerbot::hand::unified_detail {
         static void execute_command(runtime::DeviceRuntime &runtime, runtime::Deadline deadline, bool send_only,
                                     SendObserver observer, FinalSend final_send,
                                     runtime::CancellationToken cancellation, const std::function<void()> &execute,
-                                    std::function<void()> prepare_send = {}, std::function<void()> accepted_send = {});
+                                    std::function<void()> prepare_send = {}, std::function<void()> accepted_send = {},
+                                    ReceiptAccepted receipt_accepted = {});
     };
 }

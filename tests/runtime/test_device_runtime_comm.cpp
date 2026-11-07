@@ -1776,3 +1776,165 @@ TEST_CASE("comm: terminal receipt publishes completed session accounting", "[com
     REQUIRE(after.tx_frames == before.tx_frames + receipt.sent_frames);
     request.cancel();
 }
+
+TEST_CASE("unbounded legacy timeout conversions saturate instead of wrapping", "[comm][python-phase2]") {
+    using namespace linkerbot::hand::runtime;
+    REQUIRE((deadline_after(std::chrono::milliseconds::max()) == Deadline::max()));
+    REQUIRE((deadline_after(remaining(Deadline::max())) == Deadline::max()));
+}
+
+TEST_CASE("required response windows buffer an early protocol failure until delivery is known",
+          "[comm][python-phase2]") {
+    Rig rig;
+    auto plan = linkerbot::hand::o6::protocol::read_angle(0x28);
+    plan.response_window = 40ms;
+    plan.defer_errors_until_send = true;
+    plan.consume = [](const Message &) -> linkerbot::hand::protocol::Progress {
+        throw linkerbot::hand::ProtocolError("injected malformed response");
+    };
+    rig.fake->arm_tx_gate();
+    const auto request = rig.runtime->submit(plan, Clock::now() + 2s);
+    const bool entered = rig.fake->wait_until_tx_entered(500ms);
+    Message reply{};
+    reply.id = 0x28;
+    reply.dlc = 2;
+    reply.data[0] = 1;
+    rig.fake->inject(reply);
+    std::this_thread::sleep_for(10ms);
+    const bool early_done = request.completed();
+    rig.fake->release_tx_gate();
+    REQUIRE((entered));
+    REQUIRE_FALSE(early_done);
+    REQUIRE_THROWS_AS(request.wait(), linkerbot::hand::ProtocolError);
+    REQUIRE(
+        (test_support::require_value(request.send_result()).outcome == linkerbot::transport::SendOutcome::dispatched));
+}
+
+TEST_CASE("required response decoding cannot overrun its response window", "[comm][python-phase2]") {
+    Rig rig;
+    auto transaction = plan();
+    transaction.response_window = 20ms;
+    transaction.defer_errors_until_send = true;
+    const auto decode = transaction.consume;
+    transaction.consume = [decode](const Message &message) {
+        std::this_thread::sleep_for(50ms);
+        return decode(message);
+    };
+    rig.fake->on_request(0x28, [](const Message &request) {
+        auto response = request;
+        response.dlc = 7;
+        return std::vector<Message>{response};
+    });
+    REQUIRE_THROWS_AS(rig.runtime->execute(transaction, Clock::now() + 1s), linkerbot::hand::ResponseTimeoutError);
+}
+
+TEST_CASE("recovery quiet waits can be interrupted without waiting for the quiet interval", "[comm][python-phase2]") {
+    Rig rig;
+    std::atomic<bool> cancelled{false};
+    auto quiet = std::async(std::launch::async, [&] {
+        try {
+            linkerbot::hand::unified_detail::RuntimeAccess::wait_endpoint_quiet(*rig.runtime, 1s, Clock::now() + 2s,
+                                                                                [&] { return cancelled.load(); });
+            return false;
+        } catch (const linkerbot::hand::ClosedError &) {
+            return true;
+        }
+    });
+    cancelled.store(true);
+    const auto interrupted = quiet.wait_for(200ms);
+    const bool closed = quiet.get();
+    REQUIRE((interrupted == std::future_status::ready));
+    REQUIRE((closed));
+}
+
+TEST_CASE("recovery quiet windows do not include another device route", "[comm][python-phase2]") {
+    Rig rig;
+    std::atomic<bool> stop{false};
+    auto peer = std::thread([&] {
+        Message message{};
+        message.id = 0x27;
+        message.dlc = 1;
+        while (!stop.load()) {
+            rig.fake->inject(message);
+            std::this_thread::sleep_for(2ms);
+        }
+    });
+    std::exception_ptr error;
+    try {
+        linkerbot::hand::unified_detail::RuntimeAccess::wait_endpoint_quiet(*rig.runtime, 20ms, Clock::now() + 500ms,
+                                                                            [] { return false; });
+    } catch (...) {
+        error = std::current_exception();
+    }
+    stop.store(true);
+    peer.join();
+    REQUIRE_FALSE(error);
+}
+
+TEST_CASE("buffered response failures keep matching frames out of report decoders", "[comm][python-phase2]") {
+    const auto barrier = std::make_shared<std::promise<void>>();
+    auto processed = barrier->get_future();
+    Rig rig;
+    (void)rig.runtime->observe("angle", [](const Message &message) {
+        if (message.id == 0x28 && message.dlc == 7 && message.data[0] == 1) {
+            return linkerbot::hand::protocol::Progress::complete(static_cast<int>(message.data[1]));
+        }
+        return linkerbot::hand::protocol::Progress::unmatched();
+    });
+    (void)rig.runtime->observe("barrier", [barrier](const Message &message) {
+        if (message.id == 0x28 && message.dlc == 1 && message.data[0] == 0xFE) {
+            barrier->set_value();
+            return linkerbot::hand::protocol::Progress::complete(true);
+        }
+        return linkerbot::hand::protocol::Progress::unmatched();
+    });
+    Message baseline{};
+    baseline.id = 0x28;
+    baseline.dlc = 7;
+    baseline.data[0] = 1;
+    baseline.data[1] = 64;
+    rig.fake->inject(baseline);
+    const auto baseline_deadline = Clock::now() + 1s;
+    while (!rig.runtime->snapshot_as<int>("angle") && Clock::now() < baseline_deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    REQUIRE((test_support::require_value(rig.runtime->snapshot_as<int>("angle")) == 64));
+    auto transaction = plan();
+    transaction.response_window = 100ms;
+    transaction.defer_errors_until_send = true;
+    transaction.publish_after_send = true;
+    transaction.preserve_last_success = true;
+    transaction.consume = [](const Message &message) {
+        if (message.id != 0x28 || message.dlc == 0 || message.data[0] != 1) {
+            return linkerbot::hand::protocol::Progress::unmatched();
+        }
+        if (message.dlc != 7) {
+            throw linkerbot::hand::ProtocolError("injected malformed vector");
+        }
+        return linkerbot::hand::protocol::Progress::complete(static_cast<int>(message.data[1]));
+    };
+    rig.fake->arm_tx_gate();
+    const auto request = rig.runtime->submit(transaction, Clock::now() + 2s);
+    const bool entered = rig.fake->wait_until_tx_entered(1s);
+    Message response{};
+    response.id = 0x28;
+    response.dlc = 2;
+    response.data[0] = 1;
+    rig.fake->inject(response);
+    response.dlc = 7;
+    response.data[1] = 99;
+    rig.fake->inject(response);
+    response.dlc = 1;
+    response.data[0] = 0xFE;
+    rig.fake->inject(response);
+    const auto observed = processed.wait_for(1s);
+    const auto before = rig.runtime->snapshot_as<int>("angle");
+    const bool completed_early = request.completed();
+    rig.fake->release_tx_gate();
+    REQUIRE((entered));
+    REQUIRE((observed == std::future_status::ready));
+    REQUIRE_FALSE(completed_early);
+    REQUIRE((test_support::require_value(before) == 64));
+    REQUIRE_THROWS_AS(request.wait(), linkerbot::hand::ProtocolError);
+    REQUIRE((test_support::require_value(rig.runtime->snapshot_as<int>("angle")) == 64));
+}

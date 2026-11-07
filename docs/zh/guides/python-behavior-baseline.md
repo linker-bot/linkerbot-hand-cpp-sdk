@@ -41,8 +41,7 @@
 替代已验收 Python 实现前仍需完成：
 
 - 固定业务配置，针对部署型号、单位和范围边界、异常回复构建相同输入的跨语言验收用例。
-- 明确接受至完成预算与逐回复窗口、严格异常回复、关闭时在途结果、自适应反馈、自动重连及恢复静默窗口策略。
-  保留原 C++ 默认值，不将其标为已经与 Python 等价。
+- 继续验证部署业务所需的自适应反馈、自动重连和逐通道序号映射。第二批显式策略覆盖的响应窗口、异常响应、关闭终态和显式恢复不代表完整 Python 行为等价；原 C++ 默认值保持不变。
 - Python 绑定验证：包装或分配失败不丢回执，GIL、回调、析构及解释器退出安全，异常与墙上时间转换正确。
   原生单调时间戳不能直接当 Unix 时间。
 - 多手、多臂接入证明共用通道 Runtime，且设备生命周期相互独立；本次不接入 hand/arm。
@@ -61,3 +60,35 @@ V25 要求显式指定左右手；默认请求 ID 为右手 `0x001`、左手 `0x
 新增缓存使用本地成功打开/恢复代次和单调递增缓存修订号，与原有 `get_snapshot()`、健康数据的原生代次策略独立。绑定需要显式映射，不应混用。物理 Session/transport 失效或物理代次变化后，保留缓存持续无效，直到本设备再次成功初始化；原有门面就绪状态和健康策略独立保留。没有可见变化时，重复读取不会推进修订号。原有 `get_snapshot()` 仍要求 Ready。本批不包含反馈过滤等待及完整 Python 逐通道序列对齐。
 
 统一轮询支持 L20Lite/L20/L30/O30 实测速度和 O30 电压。V25 力矩限制、运动时间过期阈值分别为 100 ms、300 ms，等于阈值时仍未过期。Mounted V36 默认路径不变。继续使用既有原生轮询和 Session 发送器，不增加 Python 发送调度。hand 0.3.5 的 transport 最低版本仍独立固定为 0.3.4，不随 hand 补丁号提高。
+
+## 第二批兼容补全（0.3.6）
+
+显式设置 `runtime_behavior = RuntimeBehavior::kPython`，启用 Classic L6、O6、L20Lite、L20、L30 和显式 O30 V25 的事务策略。不兼容的协议组合在创建 transport 前拒绝。默认仍为原生策略；不包含 Python 绑定及 hand/arm 接入。
+
+每个设备合并同类主动读取、身份刷新和轮询。`read_waiter_capacity` 默认允许 256 个主动等待者，轮询不占该容量。调用者各自保留等待期限，单个等待超时不取消共享事务；未领取且已无主动读取者或轮询需求的任务丢弃，轮询需求则不受内部等待超时撤销；发布完成后加入的调用者需要下一份样本。关闭或恢复使旧等待者失效，旧结果不能跨代完成新请求。这里只协调设备意图，物理发送仍归既有 Session。读取占用设备事务通道时，尚未执行的 latest 命令仍可替换。
+
+该策略下，命令入队不启动响应计时，必需响应窗口从物理批次完成时开始；多阶段操作各自计时。`response_timeout` 不指定时使用普通事务的协议窗口，显式正值可覆盖。身份初始化和刷新独立使用 `identity_timeout`，与 Python 的优先级一致；保留原生默认 1000 ms，需要匹配固定 Python 默认值时显式设为 200 ms。getter 的调用者等待期限独立，旧 Manager 内部的等待期限不缩短已选择的响应窗口策略。Classic 身份查询以一个批次发送 C0/C1/C2/C4，帧间隔 5 ms，共用一个响应窗口。匹配但格式错误的响应报 `ProtocolError`，无关路由、操作码保持未匹配。必需响应窗口耗尽报 `ResponseTimeoutError`，它继承 `TimeoutError`。失败保留成功缓存证据，并隔离有限时间内的迟到回复；提前到达的回复或错误需等待物理回执后才能终结事务。
+
+关闭使未领取任务报 `ClosedError`。已领取的无 ACK 批次按真实物理结果终结，成功时可在关闭开始后变为 `Dispatched`；发送失败仍失败。需要 ACK 的命令不能仅因发送成功而被确认。回执保留，重新打开和恢复均不重放旧命令。C++ handle 等待超时仍返回 `false`，未来 Python 绑定需要转换为 Python 的 `TimeoutError`。
+
+`recover_for(timeout)` 的调用者等待与共享恢复执行分离，并发调用等待同一轮恢复。准备阶段受首个调用者预算和 `shutdown_timeout` 约束；准备排空失败后不得延迟重连。恢复开始后，调用者超时不撤销该轮恢复。`recovery_timeout` 默认 5 秒；既有 `recovery_attempts` 默认值仍为 1，需要与 Python 默认一致时显式设为 3；`recovery_quiet` 默认 200 ms。仅回复丢失允许重试初始化，安静时间至少覆盖失败阶段的响应窗口和迟到保护；该设备通道来帧会重新计时，但不能延长总预算。重试复用已恢复连接，身份、协议、传输错误或总预算耗尽即停止。Faulted 后可以再次显式恢复；身份及基线验证完成后恢复轮询，不重放目标和离散命令。
+
+容量、节拍、协议布局和超时覆盖应来自已验收业务配置。自动重连、自适应反馈一致性、逐通道序号映射、Python 内存分配/GIL/退出安全及部署硬件验收仍为独立工作。上面的 Python 源码固定版本仅用于比较，不表示已确认部署使用该提交。
+
+下面的显式运行时参数与固定 Python 源码默认值一致，使用前仍应核对部署业务配置：
+
+```cpp
+using namespace linkerbot::hand;
+using namespace std::chrono_literals;
+HandRuntimeConfig runtime;
+runtime.runtime_behavior = RuntimeBehavior::kPython;
+runtime.command_rate_hz = 250.0;
+runtime.discrete_queue_capacity = 16;
+runtime.read_waiter_capacity = 256;
+runtime.identity_timeout = 200ms;
+runtime.response_timeout = std::nullopt;
+runtime.shutdown_timeout = 2s;
+runtime.recovery_attempts = 3;
+runtime.recovery_timeout = 5s;
+runtime.recovery_quiet = 200ms;
+```

@@ -233,6 +233,9 @@ namespace linkerbot::hand::l6 {
                 stats->inc_timeout();
                 stats->inc_angle_timeout();
             }
+            if (dynamic_cast<const ::linkerbot::hand::ResponseTimeoutError *>(&error)) {
+                throw;
+            }
             throw internal::DataRelayTimeout(error.what(), error.context(), std::current_exception());
         }
     }

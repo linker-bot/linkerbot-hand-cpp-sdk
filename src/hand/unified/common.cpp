@@ -80,6 +80,31 @@ namespace linkerbot::hand::unified_detail {
         if (config.shutdown_timeout.count() <= 0) {
             throw ValidationError("HandDevice shutdown_timeout must be positive");
         }
+        if (config.runtime_behavior != RuntimeBehavior::kNative &&
+            config.runtime_behavior != RuntimeBehavior::kPython) {
+            throw ValidationError("unknown runtime behavior");
+        }
+        const auto maximum_duration =
+            std::chrono::duration_cast<std::chrono::milliseconds>(HealthClock::duration::max());
+        if ((config.response_timeout && *config.response_timeout > maximum_duration) ||
+            (config.runtime_behavior == RuntimeBehavior::kPython && config.identity_timeout > maximum_duration) ||
+            config.recovery_timeout > maximum_duration || config.recovery_quiet > maximum_duration) {
+            throw ValidationError("runtime durations must fit the monotonic clock");
+        }
+        if (config.runtime_behavior == RuntimeBehavior::kPython &&
+            ((config.model == Model::kL6 && config.l6_protocol != L6Protocol::kClassic) ||
+             (config.model == Model::kO30 && config.o30_layout != O30Layout::kPythonV25))) {
+            throw ValidationError("Python runtime behavior requires Classic L6 or explicit O30 V25 layout");
+        }
+        if (config.recovery_timeout.count() <= 0 || config.recovery_quiet.count() < 0) {
+            throw ValidationError("recovery_timeout must be positive and recovery_quiet nonnegative");
+        }
+        if (config.response_timeout && config.response_timeout->count() <= 0) {
+            throw ValidationError("response_timeout must be positive when specified");
+        }
+        if (config.read_waiter_capacity == 0) {
+            throw ValidationError("read_waiter_capacity must be positive");
+        }
         if (config.recovery_attempts == 0) {
             throw ValidationError("HandDevice recovery_attempts must be positive");
         }

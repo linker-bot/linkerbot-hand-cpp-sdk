@@ -52,6 +52,21 @@ namespace {
     static_assert(std::is_same_v<decltype(std::declval<const CommandHandle &>().send_results()),
                                  std::vector<linkerbot::transport::SendResult>>);
 
+    void verify_python_runtime_contract() {
+        using namespace std::chrono_literals;
+        auto config = validation::config();
+        config.runtime_behavior = linkerbot::hand::RuntimeBehavior::kPython;
+        config.command_timeout = 5ms;
+        config.response_timeout = 50ms;
+        validation::FakeHand device(config);
+        auto claimed = device.block();
+        validation::require(!claimed.wait_for(20ms), "profile command expired during a claimed send");
+        device.transport->release_tx_gate();
+        validation::complete(claimed);
+        device.hand.recover_for(2s);
+        validation::require(device.hand.is_open(), "profile recovery failed in installed consumer");
+    }
+
     void verify_unified_contract() {
         validation::FakeHand device;
         const auto handle = device.block();
@@ -120,6 +135,7 @@ namespace {
 static int run_consumer() {
     try {
         verify_unified_contract();
+        verify_python_runtime_contract();
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';
         return 1;

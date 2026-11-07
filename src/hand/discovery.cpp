@@ -139,6 +139,11 @@ namespace linkerbot::hand {
             config.recovery_backoff = runtime.recovery_backoff;
             config.o30_layout = runtime.o30_layout;
             config.empty_polling_plan_disables = runtime.empty_polling_plan_disables;
+            config.runtime_behavior = runtime.runtime_behavior;
+            config.read_waiter_capacity = runtime.read_waiter_capacity;
+            config.response_timeout = runtime.response_timeout;
+            config.recovery_timeout = runtime.recovery_timeout;
+            config.recovery_quiet = runtime.recovery_quiet;
         }
     } // namespace
 

@@ -57,6 +57,9 @@ namespace linkerbot::hand::l6 {
                 stats->inc_timeout();
                 stats->inc_tactile_timeout(static_cast<size_t>(command_prefix_ - 0xB1));
             }
+            if (dynamic_cast<const ::linkerbot::hand::ResponseTimeoutError *>(&error)) {
+                throw;
+            }
             throw internal::DataRelayTimeout(error.what());
         }
     }
@@ -130,6 +133,9 @@ namespace linkerbot::hand::l6 {
             try {
                 return core->operation("tactile.batch", deadline, token);
             } catch (const ::linkerbot::hand::TimeoutError &error) {
+                if (dynamic_cast<const ::linkerbot::hand::ResponseTimeoutError *>(&error)) {
+                    throw;
+                }
                 throw internal::DataRelayTimeout(error.what());
             }
         }();

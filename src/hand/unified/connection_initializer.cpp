@@ -86,7 +86,7 @@ namespace linkerbot::hand::unified_detail {
                                                          const DeviceCapabilities &declared,
                                                          const DeviceIdentity *expected_identity,
                                                          std::string_view operation) {
-        auto identity = backend.verify_identity(config.side, config.identity_timeout);
+        auto identity = backend.initialize_identity(config.side, config.identity_timeout);
         validate_connection_identity(identity, config, expected_identity, operation);
 
         const ErrorContext context{std::string(operation), model_name(config.model)};
@@ -111,7 +111,7 @@ namespace linkerbot::hand::unified_detail {
                 throw ProtocolError("connection baseline contains non-queryable telemetry", context);
             }
 
-            const auto sample = backend.read(semantic, config.transaction_timeout);
+            const auto sample = backend.initialize_read(semantic, config.transaction_timeout);
             const auto valid = std::visit([](const auto &value) { return value.meta.valid; }, sample);
             if (!valid) {
                 throw ProtocolError("connection baseline returned an invalid sample", context);

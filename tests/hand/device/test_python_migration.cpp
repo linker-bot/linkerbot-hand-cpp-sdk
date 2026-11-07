@@ -122,72 +122,77 @@ TEST_CASE("L30 calibration stops after the first failed ACK", "[comm][python-mig
         }
     }
 }
-TEST_CASE("O30 V25 is explicit and uses compact whole-hand objects", "[comm][python-migration]") {
-    HandDeviceConfig config;
-    config.model = Model::kO30;
-    config.side = HandSide::kLeft;
-    config.o30_layout = O30Layout::kPythonV25;
-    config.address = 1;
-    REQUIRE_FALSE(declared_capabilities(Model::kO30).supports(CommandSemantic::kTorqueLimits));
-    REQUIRE((declared_capabilities(config).supports(CommandSemantic::kTorqueLimits)));
-    REQUIRE((declared_capabilities(config).supports(CommandSemantic::kMotionTimes)));
-    auto hop = std::make_shared<o30_comm::HopEndpoint>();
-    hop->seed_defaults();
-    hop->put_ascii(o30::protocol::kMiProductInfo, 0xD9, 8, "left");
-    linkerbot::can::FakeTransport *raw = nullptr;
-    HandDevice device(config, [&] {
-        auto transport = std::make_unique<linkerbot::can::FakeTransport>();
-        raw = transport.get();
-        raw->on_request(1, [hop](const auto &request) {
-            if (request.data[1] == 0 && request.data[2] == 25) {
-                auto reply = request;
-                reply.id = 0x401;
-                reply.dlc = 32;
-                if (request.dlc <= 3) {
-                    std::fill_n(reply.data.begin() + 3, 25, uint8_t{27});
-                } else if (request.data[0] == 1) {
-                    std::fill_n(reply.data.begin() + 3, 25, uint8_t{31});
+TEST_CASE("O30 V25 is explicit and uses compact whole-hand objects", "[comm][python-migration][python-phase2]") {
+    for (const auto behavior : {RuntimeBehavior::kNative, RuntimeBehavior::kPython}) {
+
+        HandDeviceConfig config;
+        config.runtime_behavior = behavior;
+        config.model = Model::kO30;
+        config.side = HandSide::kLeft;
+        config.o30_layout = O30Layout::kPythonV25;
+        config.address = 1;
+        REQUIRE_FALSE(declared_capabilities(Model::kO30).supports(CommandSemantic::kTorqueLimits));
+        REQUIRE((declared_capabilities(config).supports(CommandSemantic::kTorqueLimits)));
+        REQUIRE((declared_capabilities(config).supports(CommandSemantic::kMotionTimes)));
+        auto hop = std::make_shared<o30_comm::HopEndpoint>();
+        hop->seed_defaults();
+        hop->put_ascii(o30::protocol::kMiProductInfo, 0xD9, 8, "left");
+        linkerbot::can::FakeTransport *raw = nullptr;
+        HandDevice device(config, [&] {
+            auto transport = std::make_unique<linkerbot::can::FakeTransport>();
+            raw = transport.get();
+            raw->on_request(1, [hop](const auto &request) {
+                if (request.data[1] == 0 && request.data[2] == 25) {
+                    auto reply = request;
+                    reply.id = 0x401;
+                    reply.dlc = 32;
+                    if (request.dlc <= 3) {
+                        std::fill_n(reply.data.begin() + 3, 25, uint8_t{27});
+                    } else if (request.data[0] == 1) {
+                        std::fill_n(reply.data.begin() + 3, 25, uint8_t{31});
+                    }
+                    return std::vector<linkerbot::can::Message>{reply};
                 }
-                return std::vector<linkerbot::can::Message>{reply};
-            }
-            return hop->reply(request);
+                return hop->reply(request);
+            });
+            return transport;
         });
-        return transport;
-    });
-    device.open();
-    const auto health = device.get_health();
-    const auto angle_metrics = std::find_if(health.channels.begin(), health.channels.end(),
-                                            [](const auto &channel) { return channel.channel == "angles"; });
-    REQUIRE((angle_metrics != health.channels.end()));
-    REQUIRE((angle_metrics->data_age.valid));
-    raw->clear_sent();
-    std::vector<double> values(20);
-    std::iota(values.begin(), values.end(), 1);
-    acknowledged(device.set_torques_limits(values));
-    acknowledged(device.set_motion_times(values));
-    const auto sent = raw->sent();
-    REQUIRE((sent.size() == 2));
-    REQUIRE((sent[0].data[0] == 6));
-    REQUIRE((sent[1].data[0] == 8));
-    for (const auto &frame : sent) {
-        REQUIRE((frame.is_fd));
-        REQUIRE_FALSE(frame.is_extended);
-        REQUIRE((frame.data[1] == 0));
-        REQUIRE((frame.data[2] == 25));
-        REQUIRE((std::vector<uint8_t>(frame.data.begin() + 3, frame.data.begin() + 28) == o30::v25::encode(values)));
+        device.open();
+        const auto health = device.get_health();
+        const auto angle_metrics = std::find_if(health.channels.begin(), health.channels.end(),
+                                                [](const auto &channel) { return channel.channel == "angles"; });
+        REQUIRE((angle_metrics != health.channels.end()));
+        REQUIRE((angle_metrics->data_age.valid));
+        raw->clear_sent();
+        std::vector<double> values(20);
+        std::iota(values.begin(), values.end(), 1);
+        acknowledged(device.set_torques_limits(values));
+        acknowledged(device.set_motion_times(values));
+        const auto sent = raw->sent();
+        REQUIRE((sent.size() == 2));
+        REQUIRE((sent[0].data[0] == 6));
+        REQUIRE((sent[1].data[0] == 8));
+        for (const auto &frame : sent) {
+            REQUIRE((frame.is_fd));
+            REQUIRE_FALSE(frame.is_extended);
+            REQUIRE((frame.data[1] == 0));
+            REQUIRE((frame.data[2] == 25));
+            REQUIRE(
+                (std::vector<uint8_t>(frame.data.begin() + 3, frame.data.begin() + 28) == o30::v25::encode(values)));
+        }
+        acknowledged(device.set_angles(std::vector<int32_t>(20, 5)));
+        const auto angles = test_support::require_value(device.get_snapshot().angles);
+        REQUIRE((angles.raw == std::vector<double>(20, 31)));
+        REQUIRE((angles.meta.delivery == TelemetryDelivery::kCommandResponse));
+        REQUIRE_FALSE(device.get_snapshot().torque_limits);
+        REQUIRE((device.get_torques_limits().raw == std::vector<double>(20, 27)));
+        REQUIRE((device.get_motion_times().raw == std::vector<double>(20, 27)));
+        const auto snapshot = device.get_snapshot();
+        REQUIRE((test_support::require_value(snapshot.torque_limits).meta.origin ==
+                 TelemetryValueOrigin::kDeviceConfigured));
+        REQUIRE((snapshot.joints.front().torque_limits_raw == 27));
+        device.close();
     }
-    acknowledged(device.set_angles(std::vector<int32_t>(20, 5)));
-    const auto angles = test_support::require_value(device.get_snapshot().angles);
-    REQUIRE((angles.raw == std::vector<double>(20, 31)));
-    REQUIRE((angles.meta.delivery == TelemetryDelivery::kCommandResponse));
-    REQUIRE_FALSE(device.get_snapshot().torque_limits);
-    REQUIRE((device.get_torques_limits().raw == std::vector<double>(20, 27)));
-    REQUIRE((device.get_motion_times().raw == std::vector<double>(20, 27)));
-    const auto snapshot = device.get_snapshot();
-    REQUIRE(
-        (test_support::require_value(snapshot.torque_limits).meta.origin == TelemetryValueOrigin::kDeviceConfigured));
-    REQUIRE((snapshot.joints.front().torque_limits_raw == 27));
-    device.close();
 }
 TEST_CASE("V25 rejects short ACKs and invalid layout without I/O", "[comm][python-migration]") {
     auto plan = o30::v25::transaction(1, o30::v25::object(CommandSemantic::kTorqueLimits), std::vector<uint8_t>(25, 4));
@@ -257,37 +262,42 @@ TEST_CASE("O30 V25 endpoint defaults match Python sides", "[comm][python-migrati
     REQUIRE_THROWS_AS(declared_capabilities(config), ValidationError);
 }
 
-TEST_CASE("O6 confirmed persistence uses the shared acknowledged operation path", "[comm][python-migration]") {
-    auto config = validation::config();
-    config.model = Model::kO6;
-    linkerbot::can::FakeTransport *raw = nullptr;
-    HandDevice device(config, [&] {
-        auto transport = std::make_unique<linkerbot::can::FakeTransport>();
-        raw = transport.get();
-        raw->on_request(0x28, [](const auto &request) {
-            auto replies = validation::l6_reply(request);
-            if (request.data[0] == 0xC0) {
-                replies.front().data[4] = 'O';
-            }
-            if (request.data[0] == 0xC1) {
-                replies.front().dlc = 4;
-            }
-            if (request.data[0] == 0xCF) {
-                replies.front().dlc = 2;
-                replies.front().data[1] = 1;
-            }
-            return replies;
+TEST_CASE("O6 confirmed persistence uses the shared acknowledged operation path",
+          "[comm][python-migration][python-phase2]") {
+    for (const auto behavior : {RuntimeBehavior::kNative, RuntimeBehavior::kPython}) {
+
+        auto config = validation::config();
+        config.runtime_behavior = behavior;
+        config.model = Model::kO6;
+        linkerbot::can::FakeTransport *raw = nullptr;
+        HandDevice device(config, [&] {
+            auto transport = std::make_unique<linkerbot::can::FakeTransport>();
+            raw = transport.get();
+            raw->on_request(0x28, [](const auto &request) {
+                auto replies = validation::l6_reply(request);
+                if (request.data[0] == 0xC0) {
+                    replies.front().data[4] = 'O';
+                }
+                if (request.data[0] == 0xC1) {
+                    replies.front().dlc = 4;
+                }
+                if (request.data[0] == 0xCF) {
+                    replies.front().dlc = 2;
+                    replies.front().data[1] = 1;
+                }
+                return replies;
+            });
+            return transport;
         });
-        return transport;
-    });
-    device.open();
-    raw->clear_sent();
-    auto saved = device.save_parameters_confirmed();
-    acknowledged(saved);
-    REQUIRE((raw->sent().size() == 1));
-    REQUIRE((saved.send_results().size() == 1));
-    REQUIRE((saved.family() == CommandFamily::kDiscreteOperation));
-    device.close();
+        device.open();
+        raw->clear_sent();
+        auto saved = device.save_parameters_confirmed();
+        acknowledged(saved);
+        REQUIRE((raw->sent().size() == 1));
+        REQUIRE((saved.send_results().size() == 1));
+        REQUIRE((saved.family() == CommandFamily::kDiscreteOperation));
+        device.close();
+    }
 }
 
 TEST_CASE("new persistence operations use the existing bounded FIFO", "[comm][python-migration]") {
@@ -305,36 +315,41 @@ TEST_CASE("new persistence operations use the existing bounded FIFO", "[comm][py
     REQUIRE((pending.send_results().size() == 1));
 }
 
-TEST_CASE("unified L30 calibration retains all three physical receipts", "[comm][python-migration]") {
-    namespace lp = linkerbot::hand::l30::protocol;
-    HandDeviceConfig config;
-    config.model = Model::kL30;
-    linkerbot::can::FakeTransport *raw = nullptr;
-    HandDevice device(config, [&] {
-        auto transport = std::make_unique<linkerbot::can::FakeTransport>();
-        raw = transport.get();
-        const std::vector<uint8_t> info{0x13, 0, 0, 0, 0x7B, 1, 2, 3, 2, 3, 4, 3, 4, 5, 1, 0, 'B', 'A'};
-        const std::string product = "LHT30-06-123-L-B-3-A";
-        raw->on_request(l30_comm::request_id(lp::kParentConfig, lp::kSubDeviceInfo, lp::kAccessRead),
-                        l30_comm::payload_handler(info));
-        raw->on_request(l30_comm::request_id(lp::kParentConfig, lp::kSubProductCode, lp::kAccessRead),
-                        l30_comm::payload_handler(std::vector<uint8_t>(product.begin(), product.end())));
-        raw->on_request(l30_comm::query_id(lp::kSubPosition), l30_comm::i16_handler(l30_comm::filled_i16(0)));
-        raw->on_request(l30_comm::query_id(lp::kSubFault), l30_comm::u8_handler(l30_comm::filled_u8(0)));
-        for (const auto pair : std::array<std::pair<uint8_t, uint8_t>, 3>{{{1, 8}, {3, 1}, {3, 5}}}) {
-            raw->on_request(l30_comm::request_id(pair.first, pair.second, lp::kAccessWrite), l30_comm::ack_handler());
-        }
-        return transport;
-    });
-    device.open();
-    raw->clear_sent();
-    auto calibrated = device.calibrate();
-    acknowledged(calibrated);
-    REQUIRE((calibrated.sent_frames() == 3));
-    REQUIRE((calibrated.send_results().size() == 3));
-    REQUIRE((raw->sent().size() == 3));
-    REQUIRE((raw->sent().back().id == l30_comm::request_id(3, 5, lp::kAccessWrite)));
-    device.close();
+TEST_CASE("unified L30 calibration retains all three physical receipts", "[comm][python-migration][python-phase2]") {
+    for (const auto behavior : {RuntimeBehavior::kNative, RuntimeBehavior::kPython}) {
+
+        namespace lp = linkerbot::hand::l30::protocol;
+        HandDeviceConfig config;
+        config.runtime_behavior = behavior;
+        config.model = Model::kL30;
+        linkerbot::can::FakeTransport *raw = nullptr;
+        HandDevice device(config, [&] {
+            auto transport = std::make_unique<linkerbot::can::FakeTransport>();
+            raw = transport.get();
+            const std::vector<uint8_t> info{0x13, 0, 0, 0, 0x7B, 1, 2, 3, 2, 3, 4, 3, 4, 5, 1, 0, 'B', 'A'};
+            const std::string product = "LHT30-06-123-L-B-3-A";
+            raw->on_request(l30_comm::request_id(lp::kParentConfig, lp::kSubDeviceInfo, lp::kAccessRead),
+                            l30_comm::payload_handler(info));
+            raw->on_request(l30_comm::request_id(lp::kParentConfig, lp::kSubProductCode, lp::kAccessRead),
+                            l30_comm::payload_handler(std::vector<uint8_t>(product.begin(), product.end())));
+            raw->on_request(l30_comm::query_id(lp::kSubPosition), l30_comm::i16_handler(l30_comm::filled_i16(0)));
+            raw->on_request(l30_comm::query_id(lp::kSubFault), l30_comm::u8_handler(l30_comm::filled_u8(0)));
+            for (const auto pair : std::array<std::pair<uint8_t, uint8_t>, 3>{{{1, 8}, {3, 1}, {3, 5}}}) {
+                raw->on_request(l30_comm::request_id(pair.first, pair.second, lp::kAccessWrite),
+                                l30_comm::ack_handler());
+            }
+            return transport;
+        });
+        device.open();
+        raw->clear_sent();
+        auto calibrated = device.calibrate();
+        acknowledged(calibrated);
+        REQUIRE((calibrated.sent_frames() == 3));
+        REQUIRE((calibrated.send_results().size() == 3));
+        REQUIRE((raw->sent().size() == 3));
+        REQUIRE((raw->sent().back().id == l30_comm::request_id(3, 5, lp::kAccessWrite)));
+        device.close();
+    }
 }
 
 TEST_CASE("two hand endpoints retain one Session and independent close", "[comm][python-migration]") {
