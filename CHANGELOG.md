@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.5
+
+- Add missing unified speed/voltage polling, correct O30 V25 freshness, and add non-destructive identity refresh and lifecycle-readable caches.
+- Cover lifecycle failure boundaries, concurrent refresh/close, installed consumers and independent hand/transport patch versions. Transport minimum remains v0.3.4; no new hardware acceptance is claimed.
+- See [release notes](RELEASE_NOTES.md) for scope and [Python behavior baseline](docs/en/guides/python-behavior-baseline.md) for remaining differences.
+
 ## 0.3.4
 
 - Add unified L6 gains, torque output and limit compensation; explicit Classic save ACKs; L30 calibration; and an opt-in O30 V25 path with torque-limit and motion-time support.

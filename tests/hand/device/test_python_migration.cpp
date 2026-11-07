@@ -538,3 +538,74 @@ TEST_CASE("identity refresh respects a preceding torque transition guard", "[com
     REQUIRE(
         (identity_ns.load() - torque_ns.load() >= std::chrono::duration_cast<std::chrono::nanoseconds>(140ms).count()));
 }
+
+TEST_CASE("V25 polling reads actual measured speeds and voltages through the Session", "[comm][python-phase1]") {
+    HandDeviceConfig config;
+    config.model = Model::kO30;
+    config.side = HandSide::kLeft;
+    config.o30_layout = O30Layout::kPythonV25;
+    config.address = 1;
+    auto hop = std::make_shared<o30_comm::HopEndpoint>();
+    hop->seed_defaults();
+    hop->put_ascii(o30::protocol::kMiProductInfo, 0xD9, 8, "left");
+    linkerbot::can::FakeTransport *raw = nullptr;
+    HandDevice device(config, [&] {
+        auto transport = std::make_unique<linkerbot::can::FakeTransport>();
+        raw = transport.get();
+        raw->on_request(1, [hop](const auto &request) {
+            if (request.data[1] == 0 && request.data[2] == 25) {
+                auto reply = request;
+                reply.id = 0x401;
+                reply.dlc = 32;
+                std::fill_n(reply.data.begin() + 3, 25, uint8_t{27});
+                return std::vector<linkerbot::can::Message>{reply};
+            }
+            return hop->reply(request);
+        });
+        return transport;
+    });
+    device.open();
+    raw->clear_sent();
+    device.start_polling({{TelemetrySemantic::kMeasuredSpeeds, 20ms}, {TelemetrySemantic::kVoltages, 20ms}});
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    bool received = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto cache = device.get_cached_snapshot();
+        received = test_support::require_value(cache.measured_speeds).meta.valid &&
+                   test_support::require_value(cache.voltages).meta.valid;
+        if (received) {
+            break;
+        }
+        std::this_thread::sleep_for(2ms);
+    }
+    const auto health = device.get_health();
+    device.stop_polling();
+    REQUIRE((received));
+    for (const auto &name : {"speeds", "voltages"}) {
+        const auto metric = std::find_if(health.channels.begin(), health.channels.end(),
+                                         [&](const auto &channel) { return channel.channel == name; });
+        REQUIRE((metric != health.channels.end()));
+        REQUIRE((metric->polling_active));
+        REQUIRE((metric->requested_hz == 50));
+        REQUIRE((metric->data_age.valid));
+    }
+    const auto sent = raw->sent();
+    REQUIRE((sent.size() >= 2));
+    REQUIRE(
+        (std::all_of(sent.begin(), sent.end(), [](const auto &frame) { return frame.is_fd && frame.data[2] == 25; })));
+    (void)device.get_torque_limits();
+    (void)device.get_motion_times();
+    std::this_thread::sleep_for(350ms);
+    const auto aged = device.get_cached_snapshot();
+    REQUIRE((test_support::require_value(aged.torque_limits).meta.stale));
+    REQUIRE((test_support::require_value(aged.motion_times).meta.stale));
+    const auto aged_health = device.get_health();
+    for (const auto &name : {"torque_limits", "motion_times"}) {
+        const auto metric = std::find_if(aged_health.channels.begin(), aged_health.channels.end(),
+                                         [&](const auto &channel) { return channel.channel == name; });
+        REQUIRE((metric != aged_health.channels.end()));
+        REQUIRE((metric->data_age.valid));
+        REQUIRE((metric->data_age.stale));
+    }
+    device.close();
+}

@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.5
+
+- 补齐统一实测速度、电压轮询，修正 O30 V25 过期阈值，新增不撤销命令的身份刷新和全生命周期可读缓存。
+- 增加失败边界、身份刷新与关闭并发、安装消费者及 hand/transport 独立补丁版本回归。transport 最低版本仍为 v0.3.4，不新增实机验收结论。
+- 范围见 [发行说明](RELEASE_NOTES.md)，剩余差异见 [Python 行为基准](docs/zh/guides/python-behavior-baseline.md)。
+
 ## 0.3.4
 
 - 新增 L6 统一增益、扭矩输出及限位补偿，Classic 显式保存 ACK，L30 校准，以及显式 O30 V25 布局的扭矩限制和运动时间。

@@ -72,9 +72,16 @@ namespace linkerbot::hand {
         // open generation and is cleared by close().
         [[nodiscard]] DeviceIdentity verify_identity(std::chrono::milliseconds timeout = std::chrono::milliseconds{
                                                          1000});
-        // Python-compatible public name for an explicit identity read.
+        // Retained alias with verify_identity() lifecycle semantics.
+        // Python-compatible read behavior uses refresh_device_info() below.
         [[nodiscard]] DeviceIdentity get_device_info(std::chrono::milliseconds timeout = std::chrono::milliseconds{
                                                          1000});
+        // Active identity read in the current generation. Success does not
+        // cancel commands or restart polling. A physical identity mismatch
+        // faults this facade; timeout/protocol errors leave admission unchanged.
+        // The timeout includes waiting for the endpoint execution gate.
+        [[nodiscard]] DeviceIdentity refresh_device_info(std::chrono::milliseconds timeout = std::chrono::milliseconds{
+                                                             1000});
         [[nodiscard]] std::optional<DeviceIdentity> get_identity() const;
         [[nodiscard]] std::optional<DeviceCapabilities> get_verified_capabilities() const;
 
@@ -173,6 +180,12 @@ namespace linkerbot::hand {
         [[nodiscard]] StallHoldCurrentSample
         get_stall_hold_currents(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
         [[nodiscard]] HandSnapshot get_snapshot() const;
+        // Zero-I/O cache available in every lifecycle state. Initial supported
+        // vector samples are shaped but invalid. On generation loss raw evidence
+        // is retained with invalid metadata; joint projections and identity are
+        // cleared. Its generation counts successful opens/recoveries locally,
+        // independently of the retained get_snapshot() native generation policy.
+        [[nodiscard]] HandSnapshot get_cached_snapshot() const;
         // Waits for a cached snapshot revision. This method never performs
         // device I/O; timeout returns the latest snapshot, even if unchanged.
         [[nodiscard]] HandSnapshot wait_for_snapshot(const HandSnapshot &previous,

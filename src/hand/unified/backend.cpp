@@ -326,6 +326,28 @@ namespace linkerbot::hand::unified_detail {
                     channel->feedback_samples = std::max<uint64_t>(channel->feedback_samples, 1);
                 };
                 update(current.angles, TelemetrySemantic::kAngles, "angles");
+                if constexpr (std::is_same_v<Device, o30::O30>) {
+                    if (config_.o30_layout == O30Layout::kPythonV25) {
+                        update(current.measured_speeds, TelemetrySemantic::kMeasuredSpeeds, "speeds");
+                        update(current.voltages, TelemetrySemantic::kVoltages, "voltages");
+                        const auto ensure = [&](const char *name) {
+                            if (std::none_of(health.channels.begin(), health.channels.end(),
+                                             [name](const auto &channel) { return channel.channel == name; })) {
+                                ChannelMetrics channel;
+                                channel.channel = name;
+                                health.channels.push_back(std::move(channel));
+                            }
+                        };
+                        if (current.torque_limits) {
+                            ensure("torque_limits");
+                            update(current.torque_limits, TelemetrySemantic::kTorqueLimits, "torque_limits");
+                        }
+                        if (current.motion_times) {
+                            ensure("motion_times");
+                            update(current.motion_times, TelemetrySemantic::kMotionTimes, "motion_times");
+                        }
+                    }
+                }
                 // These configuration channels also declare freshness bounds.
                 update(current.configured_speeds, TelemetrySemantic::kConfiguredSpeeds, "speeds");
                 return health;
@@ -346,6 +368,12 @@ namespace linkerbot::hand::unified_detail {
                             runtime::DeviceRuntime::PollTask task;
                             task.name = "v25/" + std::to_string(static_cast<unsigned>(channel.semantic));
                             task.period = channel.interval;
+                            if (channel.semantic == TelemetrySemantic::kMeasuredSpeeds) {
+                                task.name = "speeds";
+                            }
+                            if (channel.semantic == TelemetrySemantic::kVoltages) {
+                                task.name = "voltages";
+                            }
                             task.run = [this, semantic = channel.semantic](runtime::CancellationToken) {
                                 if (semantic == TelemetrySemantic::kForce || semantic == TelemetrySemantic::kForceFns) {
                                     (void)read_telemetry(*device_, semantic, std::chrono::milliseconds{1000});

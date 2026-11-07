@@ -157,8 +157,8 @@ class ReleaseMatrixTests(unittest.TestCase):
                 compatible_versions('0.3.0', comm)
         with self.assertRaises(ValueError):
             compatible_versions('0.3.3', '0.3.3')
-        with self.assertRaises(ValueError):
-            compatible_versions('0.3.6', '0.3.5')
+        compatible_versions('0.3.5', '0.3.4')
+        compatible_versions('0.3.6', '0.3.5')
 
 
 if __name__ == '__main__':

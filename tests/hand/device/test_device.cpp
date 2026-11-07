@@ -3964,3 +3964,45 @@ TEST_CASE("L20Lite measured speed never populates or overwrites configured speed
     REQUIRE_THROWS_AS(device.get_configured_speeds(), DeviceNotReadyError);
     device.close();
 }
+
+TEST_CASE("unified polling accepts deployed measured-speed and voltage channels", "[comm][python-phase1]") {
+    using namespace std::chrono_literals;
+    for (const auto model : {Model::kL20Lite, Model::kL20, Model::kL30, Model::kO30}) {
+        CAPTURE(model);
+        FakeTransport *raw = nullptr;
+        std::shared_ptr<o30_comm::HopEndpoint> hop;
+        HandDevice device(config_for(model), [&] {
+            auto transport = std::make_unique<FakeTransport>();
+            raw = transport.get();
+            install_fake_telemetry(model, raw, hop);
+            install_fake_identity(model, raw, hop);
+            if (model == Model::kL30) {
+                raw->on_request(l30_comm::query_id(l30::protocol::kSubSpeed),
+                                l30_comm::i16_handler(l30_comm::filled_i16(7)));
+            }
+            return transport;
+        });
+        device.open();
+        PollingPlan plan{{TelemetrySemantic::kMeasuredSpeeds, 20ms}};
+        if (model == Model::kO30) {
+            plan.push_back({TelemetrySemantic::kVoltages, 20ms});
+        }
+        raw->clear_sent();
+        device.start_polling(plan);
+        const auto deadline = std::chrono::steady_clock::now() + 2s;
+        bool received = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto snapshot = device.get_snapshot();
+            received = snapshot.measured_speeds && snapshot.measured_speeds->meta.valid &&
+                       (model != Model::kO30 || (snapshot.voltages && snapshot.voltages->meta.valid));
+            if (received) {
+                break;
+            }
+            std::this_thread::sleep_for(2ms);
+        }
+        device.stop_polling();
+        REQUIRE((received));
+        REQUIRE_FALSE(raw->sent().empty());
+        device.close();
+    }
+}

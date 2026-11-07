@@ -36,7 +36,7 @@ namespace linkerbot::hand {
                 for (const auto semantic : {TelemetrySemantic::kTorqueLimits, TelemetrySemantic::kMotionTimes}) {
                     auto channel = telemetry(semantic, names, ReadMode::kQuery, "u8_v25_object", {20}, u8, "count",
                                              std::nullopt, Confidence::kUnknown, false);
-                    channel.freshness_ms = 3000;
+                    channel.freshness_ms = semantic == TelemetrySemantic::kTorqueLimits ? 100 : 300;
                     result.telemetry.push_back(std::move(channel));
                 }
                 // Mounted revisions use different wire indices. Do not carry

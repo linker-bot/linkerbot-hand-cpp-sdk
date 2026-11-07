@@ -28,9 +28,6 @@ if(NOT DEFINED HAND_VERSION)
 endif()
 
 include("${_hand_source}/cmake/TransportVersion.cmake")
-if(HAND_VERSION VERSION_GREATER LINKERBOT_TRANSPORT_REQUIRED_VERSION)
-    set(LINKERBOT_TRANSPORT_REQUIRED_VERSION "${HAND_VERSION}")
-endif()
 
 set(_root "${CMAKE_CURRENT_BINARY_DIR}/package-compatibility")
 file(REMOVE_RECURSE "${_root}")

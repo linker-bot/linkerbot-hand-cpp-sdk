@@ -79,3 +79,13 @@ Still required before replacing the accepted Python implementation:
 V25 requires an explicit side. Default request IDs are right `0x001` and left `0x002`, matching Python; `address` explicitly overrides them. The native mounted default is unchanged.
 
 Classic protocol constructors explicitly select classic CAN, including when their Session uses an FD-capable adapter. Offline wire vectors resolve flags using the FD-backend default; mixed-device hardware acceptance remains pending.
+
+## First compatibility patch (0.3.5)
+
+`refresh_device_info(timeout)` reads and validates identity in the current generation without cancelling commands or restarting polling. Timeout and protocol errors leave admission unchanged. Identity mismatch or transport loss faults this facade, cancels outstanding work and invalidates its readable cache. The earlier `verify_identity()` and `get_device_info()` lifecycle semantics remain unchanged. Capability observations remain attached to their current generation.
+
+`get_cached_snapshot()` is a zero-I/O cache read available before open, during recovery/fault/close and after close. Supported initial vector samples have their declared length and `valid=false`; zero-filled raw storage is unavailable data, not a measurement. Unsupported channels remain absent; descriptor-dependent tactile payloads are not synthesized. On generation loss, successfully retained raw evidence remains with unavailable metadata, joint projections are cleared and identity is omitted because native `DeviceIdentity` has no validity metadata. A transition attempts to retain the latest native cache; capture failure cannot prevent shutdown, so earlier retained evidence may remain. Failed initialization never exposes a partial candidate baseline.
+
+The new cache uses local successful-open/recovery generations and a monotonic cache revision. These are independent of the retained native-generation policy of `get_snapshot()` and health. Bindings must not mix the two policies without explicit mapping. Repeated reads do not advance the revision without a visible change. Existing `get_snapshot()` still requires Ready. Feedback-filtered waiting and full per-channel Python sequence parity remain outside this patch.
+
+Unified polling accepts measured speeds on L20Lite/L20/L30/O30 and voltages on O30. V25 torque-limit and motion-time freshness is 100 ms and 300 ms; equality at the threshold is still fresh. Mounted V36 defaults are unchanged. These capabilities use the existing native polling and Session transmitter; no Python send scheduler is introduced. Hand 0.3.5 retains the explicit transport 0.3.4 minimum independently of the hand patch number.

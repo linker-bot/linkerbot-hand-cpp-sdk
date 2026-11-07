@@ -88,8 +88,8 @@ def verify_objects(prefix, info, library):
 def compatible_versions(hand, comm):
     h, c = tuple(map(int, hand.split('.'))), tuple(map(int, comm.split('.')))
     minimum = tuple(map(int, minimum_transport_version(Path(__file__).resolve().parents[1]).split('.')))
-    if h[:2] != c[:2] or c < max(h, minimum):
-        raise ValueError('Transport must meet the SDK minimum and hand version in the same minor line')
+    if h[:2] != c[:2] or c < minimum:
+        raise ValueError('Transport must meet the SDK minimum in the same minor line')
 
 
 def collect(directory, targets_path, version, hand_sha, comm_sha):

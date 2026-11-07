@@ -86,6 +86,13 @@ namespace {
                                 saved.send_results().size() == 1,
                             "installed confirmed-save contract failed");
 
+        const auto readable = device.hand.get_cached_snapshot();
+        validation::require(readable.angles && readable.angles->meta.valid, "installed readable cache is invalid");
+        const auto refreshed = device.hand.refresh_device_info();
+        validation::require(refreshed.model == linkerbot::hand::Model::kL6 &&
+                                device.hand.get_cached_snapshot().connection_generation ==
+                                    readable.connection_generation,
+                            "installed refresh changed the cache generation");
         const auto before = device.transport->sent().size();
         bool rejected = false;
         try {

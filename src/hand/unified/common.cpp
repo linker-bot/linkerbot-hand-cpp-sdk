@@ -162,6 +162,10 @@ namespace linkerbot::hand::unified_detail {
         case TelemetrySemantic::kCurrentLimits:
         case TelemetrySemantic::kTorques:
             return model == Model::kL6 || model == Model::kO30;
+        case TelemetrySemantic::kMeasuredSpeeds:
+            return model == Model::kL20Lite || model == Model::kL20 || model == Model::kL30 || model == Model::kO30;
+        case TelemetrySemantic::kVoltages:
+            return model == Model::kO30;
         default:
             return false;
         }

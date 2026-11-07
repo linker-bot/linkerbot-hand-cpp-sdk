@@ -2,6 +2,7 @@
 #include <linkerbot/hand/api/device.hpp>
 
 #include "detail/backend.hpp"
+#include "detail/cached_snapshot.hpp"
 #include "detail/command_scheduler.hpp"
 #include "detail/common.hpp"
 #include "detail/connection_initializer.hpp"
@@ -109,6 +110,7 @@ namespace linkerbot::hand {
               shared_session_(std::move(shared_session)), expected_identity_(std::move(expected_identity)) {
             unified_detail::validate_config(config_);
             declared_capabilities_ = declared_capabilities(config_);
+            cached_snapshot_ = unified_detail::initial_cached_snapshot(declared_capabilities_);
             scheduler_ = std::make_unique<unified_detail::CommandScheduler>(config_.command_rate_hz,
                                                                             config_.discrete_queue_capacity);
         }
@@ -156,7 +158,30 @@ namespace linkerbot::hand {
         void recover_backend();
         [[nodiscard]] HandSnapshot snapshot();
 
-        void request_close() {
+        void retain_snapshot() noexcept {
+            try {
+                if (open_.load(std::memory_order_acquire)) {
+                    (void)snapshot();
+                }
+            } catch (...) {
+                // A concurrent transition or allocation failure must not prevent
+                // admission shutdown. Existing evidence is still invalidated.
+            }
+        }
+
+        void invalidate_cache_locked() {
+            if (cache_valid_) {
+                unified_detail::invalidate_cached_snapshot(cached_snapshot_);
+                cached_snapshot_.captured_at = std::chrono::steady_clock::now();
+                cached_snapshot_.snapshot_sequence = ++cache_revision_;
+                cache_valid_ = false;
+            }
+        }
+
+        void request_close(bool capture_cache = true) {
+            if (capture_cache) {
+                retain_snapshot();
+            }
             {
                 const std::lock_guard<std::mutex> lock(mutex_);
                 if (state_ == State::kClosed && !backend_) {
@@ -465,6 +490,7 @@ namespace linkerbot::hand {
         // Called under mutex_ at the same point that closes admission and
         // invalidates a generation. Executing work is fenced by its I/O context.
         void invalidate_commands(const char *operation) {
+            invalidate_cache_locked();
             scheduler_->invalidate(std::make_exception_ptr(
                 ClosedError("pending command generation ended",
                             {operation, unified_detail::model_name(config_.model), {}, generation_})));
@@ -578,9 +604,15 @@ namespace linkerbot::hand {
         // failed open() and failed recovery attempts.
         std::optional<DeviceIdentity> expected_identity_;
         std::optional<DeviceIdentity> identity_;
+        std::optional<ErrorInfo> refresh_error_;
         std::optional<DeviceCapabilities> verified_capabilities_;
         std::optional<PollingPlan> polling_plan_;
         std::atomic<State> state_{State::kClosed};
+        HandSnapshot cached_snapshot_;
+        uint64_t cache_generation_ = 0;
+        uint64_t cache_revision_ = 0;
+        bool cache_valid_ = false;
+        std::optional<uint64_t> cached_source_sequence_;
         uint64_t snapshot_sequence_ = 0;
         std::optional<std::chrono::steady_clock::time_point> last_snapshot_time_;
         std::atomic<bool> open_{false};
@@ -626,7 +658,7 @@ namespace linkerbot::hand {
             close();
         } catch (...) // destructor must not throw; cleanup retains the whole Impl
         {
-            impl_->request_close();
+            impl_->request_close(false);
         }
     }
 
@@ -645,6 +677,7 @@ namespace linkerbot::hand {
                                      {"open", unified_detail::model_name(impl_->config_.model)});
             }
             opening_generation = ++impl_->generation_;
+            impl_->refresh_error_.reset();
             impl_->state_.store(Impl::State::kOpening, std::memory_order_release);
             impl_->identity_.reset();
             impl_->verified_capabilities_.reset();
@@ -662,6 +695,8 @@ namespace linkerbot::hand {
                 throw ClosedError("open interrupted by lifecycle shutdown");
             }
             impl_->backend_ = next;
+            ++impl_->cache_generation_;
+            impl_->cached_source_sequence_.reset();
             if (!impl_->expected_identity_) {
                 impl_->expected_identity_ = initialized.identity;
             }
@@ -775,6 +810,9 @@ namespace linkerbot::hand {
             health = HandHealth{};
         }
         Impl::project_health(health, impl_->state_.load(std::memory_order_acquire));
+        if (impl_->state_.load(std::memory_order_acquire) == Impl::State::kFaulted && impl_->refresh_error_) {
+            health.recent_error = impl_->refresh_error_;
+        }
         // Unified setter counters own logical acceptance/completion. Native
         // transaction/session counters remain available without being added a
         // second time to these family totals.
@@ -786,6 +824,7 @@ namespace linkerbot::hand {
         impl_->assert_external_lifecycle();
         impl_->ensure_ready("verify_identity");
         const std::lock_guard<std::timed_mutex> lifecycle(impl_->lifecycle_mutex_);
+        impl_->retain_snapshot();
         const auto context = impl_->capture("verify_identity");
         if (timeout.count() <= 0) {
             throw ValidationError("verify_identity timeout must be positive");
@@ -845,6 +884,67 @@ namespace linkerbot::hand {
     }
 
     DeviceIdentity HandDevice::get_device_info(std::chrono::milliseconds timeout) { return verify_identity(timeout); }
+
+    DeviceIdentity HandDevice::refresh_device_info(std::chrono::milliseconds timeout) {
+        if (timeout.count() <= 0) {
+            throw ValidationError("refresh_device_info timeout must be positive");
+        }
+        impl_->assert_external_lifecycle();
+        impl_->retain_snapshot();
+        const auto context = impl_->capture("refresh_device_info");
+        try {
+            auto lease = impl_->begin_io(context, "refresh_device_info");
+            auto identity = impl_->complete_io(context, "refresh_device_info", [&] {
+                return context.backend->verify_identity(impl_->config_.side, timeout);
+            });
+            const std::lock_guard<std::mutex> lock(impl_->mutex_);
+            impl_->check_context(context, "refresh_device_info");
+            unified_detail::validate_connection_identity(
+                identity, impl_->config_, impl_->expected_identity_ ? &*impl_->expected_identity_ : nullptr,
+                "refresh_device_info");
+            // Identity refresh leaves this generation's capability observations
+            // and polling decisions intact, matching the Python read path.
+            impl_->identity_ = identity;
+            impl_->cached_source_sequence_.reset();
+            return identity;
+        } catch (const HandError &error) {
+            if (error.code() != ErrorCode::kIdentityMismatch && error.code() != ErrorCode::kTransport &&
+                error.code() != ErrorCode::kDeviceNotReady) {
+                throw;
+            }
+            bool faulted = false;
+            {
+                const std::lock_guard<std::mutex> lock(impl_->mutex_);
+                if (context.generation == impl_->generation_ && context.backend == impl_->backend_ &&
+                    impl_->state_.load(std::memory_order_acquire) == Impl::State::kReady) {
+                    impl_->invalidate_commands("refresh_device_info");
+                    ++impl_->generation_;
+                    impl_->state_.store(Impl::State::kFaulted, std::memory_order_release);
+                    impl_->open_.store(false, std::memory_order_release);
+                    impl_->identity_.reset();
+                    impl_->verified_capabilities_.reset();
+                    impl_->polling_plan_.reset();
+                    impl_->refresh_error_ =
+                        ErrorInfo{error.code(), error.what(),
+                                  error.code() == ErrorCode::kIdentityMismatch ? "IdentityMismatchError"
+                                  : error.code() == ErrorCode::kTransport      ? "TransportError"
+                                                                               : "DeviceNotReadyError",
+                                  error.context()};
+                    faulted = true;
+                }
+            }
+            if (faulted) {
+                context.backend->cancel_commands();
+                try {
+                    context.backend->stop_polling();
+                } catch (...) { /* Preserve the identity/transport error. */
+                }
+                impl_->snapshot_cv_.notify_all();
+                impl_->stream_cv_.notify_all();
+            }
+            throw;
+        }
+    }
 
     std::optional<DeviceIdentity> HandDevice::get_identity() const {
         if (impl_->state_.load(std::memory_order_acquire) != Impl::State::kReady) {
@@ -1066,7 +1166,8 @@ namespace linkerbot::hand {
         const auto context = capture("get_snapshot");
         const auto &capabilities = context.capabilities;
         auto result = context.backend->snapshot(capabilities.model, capabilities.side, capabilities);
-        const auto generation = context.backend->health().connection_generation;
+        const auto health = context.backend->health();
+        const auto generation = health.connection_generation;
         const std::lock_guard<std::mutex> lock(mutex_);
         check_context(context, "get_snapshot");
 
@@ -1144,7 +1245,36 @@ namespace linkerbot::hand {
         complete_meta(result.stall_detection_times, TelemetrySemantic::kStallDetectionTimes);
         complete_meta(result.stall_thresholds, TelemetrySemantic::kStallThresholds);
         complete_meta(result.stall_hold_currents, TelemetrySemantic::kStallHoldCurrents);
+        auto retained = result;
+        unified_detail::shape_cached_samples(retained, capabilities);
+        unified_detail::set_cached_generation(retained, cache_generation_);
+        if (!cache_valid_ || cached_source_sequence_ != result.snapshot_sequence) {
+            ++cache_revision_;
+        }
+        retained.snapshot_sequence = cache_revision_;
+        cached_snapshot_ = std::move(retained);
+        cached_source_sequence_ = result.snapshot_sequence;
+        cache_valid_ = true;
+        if (!health.connected()) {
+            invalidate_cache_locked();
+        }
         return result;
+    }
+
+    HandSnapshot HandDevice::get_cached_snapshot() const {
+        try {
+            // This only projects native caches, never a device transaction.
+            if (impl_->open_.load(std::memory_order_acquire)) {
+                (void)impl_->snapshot();
+            }
+        } catch (const DeviceNotReadyError &) {
+            // The lifecycle transition owns invalidation under the same mutex.
+        }
+        const std::lock_guard<std::mutex> lock(impl_->mutex_);
+        if (impl_->state_.load(std::memory_order_acquire) != Impl::State::kReady) {
+            impl_->invalidate_cache_locked();
+        }
+        return impl_->cached_snapshot_;
     }
 
     HandSnapshot HandDevice::wait_for_snapshot(const HandSnapshot &previous, std::chrono::milliseconds timeout) const {
@@ -1236,6 +1366,7 @@ namespace linkerbot::hand {
 
     void HandDevice::Impl::recover_backend() {
         auto *impl_ = this;
+        impl_->retain_snapshot();
         const auto context = impl_->capture("recover");
         auto &selected = *context.backend;
         std::optional<PollingPlan> restore;
@@ -1295,6 +1426,8 @@ namespace linkerbot::hand {
                 if (impl_->generation_ != recovery_generation) {
                     throw ClosedError("recovery generation ended before Ready");
                 }
+                ++impl_->cache_generation_;
+                impl_->cached_source_sequence_.reset();
                 impl_->identity_ = std::move(initialized.identity);
                 impl_->verified_capabilities_ = std::move(initialized.capabilities);
                 impl_->state_.store(Impl::State::kReady, std::memory_order_release);

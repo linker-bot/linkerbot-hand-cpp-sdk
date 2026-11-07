@@ -85,6 +85,9 @@ namespace linkerbot::hand::unified_detail {
         std::map<l20lite::SensorSource, std::chrono::milliseconds> selected;
         for (const auto &channel : plan) {
             switch (channel.semantic) {
+            case TelemetrySemantic::kMeasuredSpeeds:
+                selected[l20lite::SensorSource::kSpeed] = channel.interval;
+                break;
             case TelemetrySemantic::kAngles:
                 selected[l20lite::SensorSource::kAngle] = channel.interval;
                 break;
@@ -122,6 +125,9 @@ namespace linkerbot::hand::unified_detail {
         std::map<l20::SensorSource, std::chrono::milliseconds> selected;
         for (const auto &channel : plan) {
             switch (channel.semantic) {
+            case TelemetrySemantic::kMeasuredSpeeds:
+                selected[l20::SensorSource::kSpeed] = channel.interval;
+                break;
             case TelemetrySemantic::kAngles:
                 selected[l20::SensorSource::kAngle] = channel.interval;
                 break;
@@ -148,6 +154,9 @@ namespace linkerbot::hand::unified_detail {
         std::map<l30::SensorSource, std::chrono::milliseconds> selected;
         for (const auto &channel : plan) {
             switch (channel.semantic) {
+            case TelemetrySemantic::kMeasuredSpeeds:
+                selected[l30::SensorSource::kSpeed] = channel.interval;
+                break;
             case TelemetrySemantic::kAngles:
                 selected[l30::SensorSource::kAngle] = channel.interval;
                 break;
@@ -174,6 +183,12 @@ namespace linkerbot::hand::unified_detail {
         std::map<o30::SensorSource, std::chrono::milliseconds> selected;
         for (const auto &channel : plan) {
             switch (channel.semantic) {
+            case TelemetrySemantic::kMeasuredSpeeds:
+                selected[o30::SensorSource::kSpeed] = channel.interval;
+                break;
+            case TelemetrySemantic::kVoltages:
+                selected[o30::SensorSource::kVoltage] = channel.interval;
+                break;
             case TelemetrySemantic::kAngles:
                 selected[o30::SensorSource::kAngle] = channel.interval;
                 break;

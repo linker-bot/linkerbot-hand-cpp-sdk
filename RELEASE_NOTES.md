@@ -1,5 +1,17 @@
 # Release notes
 
+## 0.3.5
+
+- Add unified polling for measured speeds on L20Lite, L20, L30 and O30, and voltages on O30, using the existing native polling and Session send path.
+- Correct explicit O30 V25 torque-limit and motion-time freshness to 100 ms and 300 ms. Apply these bounds to projected snapshots and health. Mounted V36 remains unchanged.
+- Add `refresh_device_info()` for an identity read that preserves queued commands, polling and the current generation on success. Timeout/protocol failures leave readiness unchanged; identity mismatch or transport loss faults admission and invalidates the readable cache. Existing `get_device_info()` and `verify_identity()` retain their earlier lifecycle behavior.
+- Add `get_cached_snapshot()` for zero-I/O reads in all lifecycle states. Initial supported vectors are shaped and invalid. Generation loss retains raw evidence with invalid metadata, clears joint projections and omits identity. Successful open/recovery replaces the cache; failed initialization cannot publish a partial baseline. Existing `get_snapshot()` still requires Ready.
+- Keep hand and transport patch versions independent within the supported minor line. Source, prebuilt, installed-consumer and release checks retain the explicit transport 0.3.4 minimum.
+
+The paired transport remains v0.3.4 (`0e190032d65ed0b315337b45b3779cf4f650ed68`). Rebuild the SDK and downstream consumers with matching headers and static libraries. Existing C++ signatures and native defaults remain available; no new binary compatibility guarantee is made.
+
+Validation covers native builds, FakeTransport lifecycle/concurrency regressions, source/prebuilt/installed consumers, sanitizers, static analysis and the twelve-target package matrix. No new physical-device acceptance is claimed. The new polling channels, identity refresh, recovery/cache transitions and deployed adapter/driver/firmware combinations require separate hardware validation. Existing hardware records retain their original scope. O20, Python bindings, hand/arm integration and complete Python runtime equivalence are outside this patch.
+
 ## 0.3.4
 
 - Explicitly mark Classic L6/O6/L20Lite/L20 protocol frames as classic CAN so an FD-capable shared Session cannot promote them to FD through backend defaults. Existing classic-link behavior is retained.
