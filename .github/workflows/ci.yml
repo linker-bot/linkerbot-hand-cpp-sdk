@@ -259,7 +259,7 @@ jobs:
 
   diagnose-arm64:
     if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
-    runs-on: windows-11-arm
+    runs-on: windows-11-vs2026-arm
     timeout-minutes: 45
     defaults:
       run:
@@ -277,7 +277,7 @@ jobs:
       - run: ./hand-cpp/validation/setup_windows.ps1 -Version '4.2.3' -Architecture 'arm64'
       - name: Build optimized diagnostic executable
         run: |
-          cmake -S hand-cpp -B build/diagnostic -G 'Visual Studio 17 2022' -A ARM64 -T 'v143,version=14.44' `
+          cmake -S hand-cpp -B build/diagnostic -G 'Visual Studio 18 2026' -A ARM64 -T 'v143,version=14.44' `
             '-DLINKERBOT_COMM_SOURCE_DIR=${{ github.workspace }}/linkerbot-transport-cpp' `
             -DLINKERBOT_BUILD_TESTS=ON -DLINKERBOT_COMM_BUILD_TESTS=OFF `
             '-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /Zi /DLINKERBOT_DIAGNOSE_WINDOWS_FAULTS /DNOMINMAX' `
@@ -296,4 +296,4 @@ jobs:
           name: arm64-fault-diagnostic
           path: |
             fault.log
-            build/diagnostic/tests/Release/tests.map
+            build/diagnostic/**/*.map
