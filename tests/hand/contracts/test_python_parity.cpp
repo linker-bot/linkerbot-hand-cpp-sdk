@@ -13,8 +13,8 @@
 using namespace linkerbot::hand;
 
 // Golden contract values exported from Python Hand SDK b6c927a. These cover
-// retained common model channels; removed unified torque writes, torque limits,
-// motion times and limit compensation are excluded. The C++-only L20 current-limit cache has its own policy.
+// retained common model channels. Added controls are checked against the pinned
+// Python migration vectors; the C++-only L20 current-limit cache has its own policy.
 TEST_CASE("common models preserve Python telemetry freshness contracts", "[comm][contracts][parity][freshness]") {
     using Entry = std::pair<TelemetrySemantic, double>;
     const std::vector<std::pair<Model, std::vector<Entry>>> expected{
@@ -126,6 +126,11 @@ TEST_CASE("common models preserve Python command ACK contracts", "[comm][contrac
              {CommandSemantic::kStallDetectionTimes, AckSupport::kRequired},
              {CommandSemantic::kStallThresholds, AckSupport::kRequired},
              {CommandSemantic::kStallHoldCurrents, AckSupport::kRequired},
+             {CommandSemantic::kPositionKp, AckSupport::kRequired},
+             {CommandSemantic::kPositionKd, AckSupport::kRequired},
+             {CommandSemantic::kTorqueKd, AckSupport::kRequired},
+             {CommandSemantic::kTorques, AckSupport::kRequired},
+             {CommandSemantic::kLimitCompensations, AckSupport::kRequired},
          }},
         {Model::kO6,
          {

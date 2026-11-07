@@ -7,7 +7,7 @@ p.add_argument('--comm-include', type=pathlib.Path, required=True)
 p.add_argument('--compiler', default='c++')
 a = p.parse_args()
 entries = ['protocol/transaction.hpp', 'o6/protocol_backend.hpp', 'l6/protocol_backend.hpp',
-           'o30/transaction.hpp', 'l30/protocol.hpp', 'l6/hop_protocol.hpp', 'protocol/hop.hpp']
+           'o30/transaction.hpp', 'o30/v25.hpp', 'l30/protocol.hpp', 'l6/hop_protocol.hpp', 'protocol/hop.hpp']
 # Additional model plans are included once introduced by their migration.
 for model in ['l20lite', 'l20', 'l30']:
     for name in ['protocol_backend.hpp', 'transaction.hpp']:

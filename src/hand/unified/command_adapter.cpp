@@ -218,7 +218,8 @@ namespace linkerbot::hand::unified_detail {
             if (request.completion) {
                 const auto receipts = request.completion->send_results();
                 if (!receipts.empty() && receipts.back().completed_at) {
-                    dispatched_at = *receipts.back().completed_at;
+                    dispatched_at = ::linkerbot::hand::detail::checked_value(
+                        receipts.back().completed_at, "torque transition receipt has no completion timestamp");
                 }
             }
             const auto until = dispatched_at + settle;

@@ -42,11 +42,11 @@ def python_frames(sdk, scenario):
     while transaction:
         for message in transaction.request_messages:
             native_can = hasattr(message, "is_fd")
-            fd = bool(message.is_fd) if native_can else True
+            fd = bool(message.is_fd) if native_can else bool(message.frame_type & 0x04)
             wire_length = message.dlc if native_can else (0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64)[message.dlc]
             frames.append({"id": message.arbitration_id, "fd": fd,
                            "extended": message.is_extended_id,
-                           "brs": bool(getattr(message, "bitrate_switch", False)),
+                           "brs": bool(message.bitrate_switch) if native_can else bool(message.frame_type & 0x08),
                            "data": list(bytes(message.data).ljust(wire_length, b"\0"))})
         transaction = transaction.next_transaction
     return frames

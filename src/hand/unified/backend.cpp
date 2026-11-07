@@ -271,8 +271,7 @@ namespace linkerbot::hand::unified_detail {
 
             [[nodiscard]] HandHealth health() const override {
                 auto health = device_->health();
-                auto current =
-                    unified_snapshot(device_->get_snapshot(), Model::kUnknown, HandSide::kUnknown, capabilities_);
+                auto current = snapshot(Model::kUnknown, HandSide::kUnknown, capabilities_);
                 const auto now = HealthClock::now();
                 const auto &capabilities = capabilities_;
                 const auto update = [&](auto &sample, TelemetrySemantic semantic, const char *name) {

@@ -678,6 +678,27 @@ TEST_CASE("HandDevice dispatches every declared non-angle command", "[comm][devi
 
                 std::optional<CommandHandle> handle;
                 switch (command.semantic) {
+                case CommandSemantic::kPositionKp:
+                    handle = completed(device.set_position_kp(values));
+                    break;
+                case CommandSemantic::kPositionKd:
+                    handle = completed(device.set_position_kd(values));
+                    break;
+                case CommandSemantic::kTorqueKd:
+                    handle = completed(device.set_torque_kd(values));
+                    break;
+                case CommandSemantic::kTorques:
+                    handle = completed(device.set_torques(values));
+                    break;
+                case CommandSemantic::kTorqueLimits:
+                    handle = completed(device.set_torque_limits(values));
+                    break;
+                case CommandSemantic::kMotionTimes:
+                    handle = completed(device.set_motion_times(values));
+                    break;
+                case CommandSemantic::kLimitCompensations:
+                    handle = completed(device.set_limit_compensations(values));
+                    break;
                 case CommandSemantic::kSpeeds:
                     handle = completed(device.set_speeds(values));
                     break;
