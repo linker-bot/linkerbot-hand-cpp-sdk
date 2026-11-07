@@ -94,7 +94,8 @@ namespace {
         PublicationValue(const PublicationValue &) = default;
         PublicationValue &operator=(const PublicationValue &) = default;
         PublicationValue &operator=(PublicationValue &&) = default;
-        PublicationValue(PublicationValue &&other) : state(other.state), stage(other.stage + 1) {
+        // Intentionally throwing move: simulate failure while publishing a value.
+        PublicationValue(PublicationValue &&other) noexcept(false) : state(other.state), stage(other.stage + 1) {
             // The first move installs the worker's local result. The second
             // publishes it under the coordinator lock, delaying the waiter's
             // wakeup until after its deadline without a scheduler race.
