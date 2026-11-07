@@ -2,7 +2,9 @@
 
 ## 0.3.4
 
+- Explicitly mark Classic L6/O6/L20Lite/L20 protocol frames as classic CAN so an FD-capable shared Session cannot promote them to FD through backend defaults. Existing classic-link behavior is retained.
 - Add unified L6 position Kp/Kd, torque Kd, torque-output and limit-compensation commands and samples. Keep returned configuration bytes rather than substituting requested values. Torque output uses FIFO and bounded mode-transition guards derived from the Python reference.
+- Add `submit_operation()` for nonblocking operation admission through the existing bounded FIFO; retain the earlier synchronous operation methods.
 - Add asynchronous `save_parameters_confirmed()` for Classic L6/O6. Require the explicit `CF 01` reply. Keep the existing `save_parameters()` behavior unchanged.
 - Add L30 calibration as an ACK-gated disable, unlock and calibrate sequence. A failed stage prevents later writes; calibration does not re-enable the hand.
 - Add an explicit O30 Python V25 layout for compact whole-hand commands and telemetry, including torque limits and motion time. Keep the default mounted V36 path and native Managers unchanged. Require complete response coverage and distinguish configuration queries from write ACKs.

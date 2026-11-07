@@ -50,6 +50,7 @@ namespace linkerbot::hand::l30::protocol {
     inline constexpr uint8_t kSubDeviceInfo = 0x02;
     inline constexpr uint8_t kSubProductCode = 0x03;
     inline constexpr uint8_t kSubNodeId = 0x04;
+    inline constexpr uint8_t kSubCalibrate = 0x05;
     inline constexpr uint8_t kSubHandType = 0x06;
 
     // Tactile (parent 0x2) per-finger subcommands.

@@ -31,6 +31,7 @@ namespace linkerbot::hand::l6::protocol {
                 throw ValidationError("L6 classic payload exceeds 8 bytes");
             }
             can::Message out{};
+            out.format = can::FrameFormat::kClassic;
             out.id = arguments.id;
             out.dlc = static_cast<uint8_t>(1 + arguments.payload.size());
             out.data[0] = arguments.opcode;

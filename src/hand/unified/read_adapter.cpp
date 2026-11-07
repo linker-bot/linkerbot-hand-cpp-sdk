@@ -1,3 +1,4 @@
+#include "detail/classic_response.hpp"
 #include "detail/force.hpp"
 #include "detail/model_adapters.hpp"
 
@@ -7,6 +8,7 @@
 #include <string>
 
 #include <linkerbot/hand/errors.hpp>
+#include <linkerbot/hand/l6/protocol_backend.hpp>
 
 namespace linkerbot::hand::unified_detail {
     namespace {
@@ -91,18 +93,54 @@ namespace linkerbot::hand::unified_detail {
     TelemetrySample read_telemetry(l6::L6 &device, TelemetrySemantic semantic, std::chrono::milliseconds timeout) {
         require_timeout(timeout);
         switch (semantic) {
-        case TelemetrySemantic::kPositionKp:
-            static_cast<void>(device.position_kp.get_blocking(timeout));
+        case TelemetrySemantic::kPositionKp: {
+            const auto address = device.capabilities().transport.request_id;
+            if (!address) {
+                throw ValidationError("L6 telemetry requires a request ID");
+            }
+            const auto id = *address;
+            auto plan = l6::protocol::raw_control_transaction(id, l6::kPositionKpOpcode, "position_kp");
+            (void)device.runtime()->execute(
+                strict_classic_vector(std::move(plan), {id, l6::kPositionKpOpcode, l6::kJointCount}),
+                runtime::deadline_after(timeout));
             break;
-        case TelemetrySemantic::kPositionKd:
-            static_cast<void>(device.position_kd.get_blocking(timeout));
+        }
+        case TelemetrySemantic::kPositionKd: {
+            const auto address = device.capabilities().transport.request_id;
+            if (!address) {
+                throw ValidationError("L6 telemetry requires a request ID");
+            }
+            const auto id = *address;
+            auto plan = l6::protocol::raw_control_transaction(id, l6::kPositionKdOpcode, "position_kd");
+            (void)device.runtime()->execute(
+                strict_classic_vector(std::move(plan), {id, l6::kPositionKdOpcode, l6::kJointCount}),
+                runtime::deadline_after(timeout));
             break;
-        case TelemetrySemantic::kTorqueKd:
-            static_cast<void>(device.torque_kd.get_blocking(timeout));
+        }
+        case TelemetrySemantic::kTorqueKd: {
+            const auto address = device.capabilities().transport.request_id;
+            if (!address) {
+                throw ValidationError("L6 telemetry requires a request ID");
+            }
+            const auto id = *address;
+            auto plan = l6::protocol::raw_control_transaction(id, l6::kTorqueKdOpcode, "torque_kd");
+            (void)device.runtime()->execute(
+                strict_classic_vector(std::move(plan), {id, l6::kTorqueKdOpcode, l6::kJointCount}),
+                runtime::deadline_after(timeout));
             break;
-        case TelemetrySemantic::kLimitCompensations:
-            static_cast<void>(device.limit_compensation.get_blocking(timeout));
+        }
+        case TelemetrySemantic::kLimitCompensations: {
+            const auto address = device.capabilities().transport.request_id;
+            if (!address) {
+                throw ValidationError("L6 telemetry requires a request ID");
+            }
+            const auto id = *address;
+            auto plan = l6::protocol::raw_control_transaction(id, l6::kLimitCompensationOpcode, "limit_compensations");
+            (void)device.runtime()->execute(
+                strict_classic_vector(std::move(plan), {id, l6::kLimitCompensationOpcode, l6::kJointCount}),
+                runtime::deadline_after(timeout));
             break;
+        }
         case TelemetrySemantic::kAngles:
             return angle_sample(device.angle.get_blocking(timeout), device.capabilities());
         case TelemetrySemantic::kConfiguredSpeeds:

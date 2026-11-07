@@ -1,7 +1,9 @@
 #include "fake_classic_hand.hpp"
 #include <iostream>
+#include <linkerbot/can/frame.hpp>
 #include <linkerbot/hand/l30/l30.hpp>
 #include <linkerbot/hand/o30/v25.hpp>
+#include <map>
 
 namespace {
     using namespace linkerbot::hand;
@@ -28,13 +30,44 @@ namespace {
             return raw->sent();
         }
         if (name.rfind("o30_", 0) == 0) {
-            const auto semantic =
-                name == "o30_torque_limits" ? CommandSemantic::kTorqueLimits : CommandSemantic::kMotionTimes;
+            const std::map<std::string, TelemetrySemantic> reads{
+                {"o30_read_angles", TelemetrySemantic::kAngles},
+                {"o30_read_measured_speeds", TelemetrySemantic::kMeasuredSpeeds},
+                {"o30_read_configured_speeds", TelemetrySemantic::kConfiguredSpeeds},
+                {"o30_read_configured_accelerations", TelemetrySemantic::kConfiguredAccelerations},
+                {"o30_read_currents", TelemetrySemantic::kCurrents},
+                {"o30_read_current_limits", TelemetrySemantic::kCurrentLimits},
+                {"o30_read_torques", TelemetrySemantic::kTorques},
+                {"o30_read_torque_limits", TelemetrySemantic::kTorqueLimits},
+                {"o30_read_motion_times", TelemetrySemantic::kMotionTimes},
+                {"o30_read_temperatures", TelemetrySemantic::kTemperatures},
+                {"o30_read_voltages", TelemetrySemantic::kVoltages},
+                {"o30_read_faults", TelemetrySemantic::kFaults},
+                {"o30_read_stall_detection_times", TelemetrySemantic::kStallDetectionTimes},
+                {"o30_read_stall_thresholds", TelemetrySemantic::kStallThresholds},
+                {"o30_read_stall_hold_currents", TelemetrySemantic::kStallHoldCurrents}};
+            if (const auto found = reads.find(name); found != reads.end()) {
+                return o30::v25::transaction(1, o30::v25::object(found->second)).frames;
+            }
+            const std::map<std::string, CommandSemantic> writes{
+                {"o30_angles", CommandSemantic::kAngles},
+                {"o30_speeds", CommandSemantic::kSpeeds},
+                {"o30_accelerations", CommandSemantic::kAccelerations},
+                {"o30_current_limits", CommandSemantic::kCurrentLimits},
+                {"o30_torque_limits", CommandSemantic::kTorqueLimits},
+                {"o30_motion_times", CommandSemantic::kMotionTimes},
+                {"o30_stall_detection_times", CommandSemantic::kStallDetectionTimes},
+                {"o30_stall_thresholds", CommandSemantic::kStallThresholds},
+                {"o30_stall_hold_currents", CommandSemantic::kStallHoldCurrents}};
+            const auto found = writes.find(name);
+            if (found == writes.end()) {
+                throw std::runtime_error("unknown O30 scenario");
+            }
             std::vector<double> values;
             for (int i = 1; i <= 20; ++i) {
                 values.push_back(i);
             }
-            return o30::v25::transaction(1, o30::v25::object(semantic), o30::v25::encode(values)).frames;
+            return o30::v25::transaction(1, o30::v25::object(found->second), o30::v25::encode(values)).frames;
         }
         validation::FakeHand device;
         device.transport->on_request(0x28, [](const Message &request) {
@@ -89,9 +122,10 @@ int main(int argc, char **argv) {
                 std::cout << ",";
             }
             const auto &f = frames[i];
-            std::cout << "{\"id\":" << f.id << ",\"fd\":" << (f.is_fd ? "true" : "false")
+            const auto flags = linkerbot::can::resolve_tx_flags(linkerbot::can::LinkKind::kCanFd, f);
+            std::cout << "{\"id\":" << f.id << ",\"fd\":" << (flags.is_fd ? "true" : "false")
                       << ",\"extended\":" << (f.is_extended ? "true" : "false")
-                      << ",\"brs\":" << (f.is_brs ? "true" : "false") << ",\"data\":[";
+                      << ",\"brs\":" << (flags.is_brs ? "true" : "false") << ",\"data\":[";
             for (size_t j = 0; j < f.dlc; ++j) {
                 if (j) {
                     std::cout << ",";

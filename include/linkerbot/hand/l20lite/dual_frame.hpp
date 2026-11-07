@@ -124,7 +124,8 @@ namespace linkerbot::hand::l20lite {
                                   const std::array<uint8_t, kJointCount> &raw, std::chrono::microseconds gap = {}) {
         std::vector<can::Message> frames;
         for (const auto &part : parts) {
-            can::Message msg;
+            can::Message msg{};
+            msg.format = can::FrameFormat::kClassic;
             msg.id = id;
             msg.dlc = static_cast<uint8_t>(1 + part.count);
             msg.data[0] = part.cmd;
@@ -140,7 +141,8 @@ namespace linkerbot::hand::l20lite {
                                   std::chrono::microseconds gap = {}) {
         std::vector<can::Message> frames;
         for (const auto &part : parts) {
-            can::Message msg;
+            can::Message msg{};
+            msg.format = can::FrameFormat::kClassic;
             msg.id = id;
             msg.dlc = 1;
             msg.data[0] = part.cmd;

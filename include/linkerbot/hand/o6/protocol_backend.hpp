@@ -57,7 +57,8 @@ namespace linkerbot::hand::o6::protocol {
                                                                                   : common::Origin::response);
     }
     inline common::TransactionPlan read_angle(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0x01;
@@ -69,7 +70,8 @@ namespace linkerbot::hand::o6::protocol {
         return plan;
     }
     inline common::TransactionPlan write_angle(uint32_t id, const std::array<uint8_t, Angle::kJointCount> &raw) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         message.data[0] = 0x01;
@@ -108,7 +110,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(CurrentData{values, {}});
     }
     inline common::TransactionPlan read_current(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0x02;
@@ -121,7 +124,8 @@ namespace linkerbot::hand::o6::protocol {
     }
     inline common::TransactionPlan write_current_limit(uint32_t id,
                                                        const std::array<uint8_t, kCurrentJointCount> &values) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         message.data[0] = 0x02;
@@ -158,7 +162,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(SpeedData{Speed::from_array(values), {}});
     }
     inline common::TransactionPlan read_speed(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0x05;
@@ -170,7 +175,8 @@ namespace linkerbot::hand::o6::protocol {
         return plan;
     }
     inline common::TransactionPlan write_speed(uint32_t id, const std::array<uint8_t, Speed::kJointCount> &raw) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         message.data[0] = 0x05;
@@ -199,7 +205,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(AccelerationData{Acceleration::from_array(values), {}});
     }
     inline common::TransactionPlan read_acceleration(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0x87;
@@ -212,7 +219,8 @@ namespace linkerbot::hand::o6::protocol {
     }
     inline common::TransactionPlan write_acceleration(uint32_t id,
                                                       const std::array<uint8_t, Acceleration::kJointCount> &raw) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         message.data[0] = 0x87;
@@ -241,7 +249,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(TemperatureData{Temperature::from_array(values), {}});
     }
     inline common::TransactionPlan read_temperature(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0x33;
@@ -267,7 +276,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(FaultData{Fault::from_raw(raw), {}});
     }
     inline common::TransactionPlan read_fault(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0x35;
@@ -295,7 +305,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(StallTimeData{StallTime::from_array(values), {}});
     }
     inline common::TransactionPlan read_stall_time(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC6;
@@ -308,7 +319,8 @@ namespace linkerbot::hand::o6::protocol {
     }
     inline common::TransactionPlan write_stall_time(uint32_t id,
                                                     const std::array<uint8_t, StallTime::kJointCount> &raw) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         message.data[0] = 0xC6;
@@ -335,7 +347,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(StallLimitData{StallLimit::from_array(values), {}});
     }
     inline common::TransactionPlan read_stall_threshold(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC5;
@@ -348,7 +361,8 @@ namespace linkerbot::hand::o6::protocol {
     }
     inline common::TransactionPlan write_stall_threshold(uint32_t id,
                                                          const std::array<uint8_t, StallLimit::kJointCount> &raw) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         message.data[0] = 0xC5;
@@ -375,7 +389,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(StallLimitData{StallLimit::from_array(values), {}});
     }
     inline common::TransactionPlan read_stall_torque(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC7;
@@ -388,7 +403,8 @@ namespace linkerbot::hand::o6::protocol {
     }
     inline common::TransactionPlan write_stall_torque(uint32_t id,
                                                       const std::array<uint8_t, StallLimit::kJointCount> &raw) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         message.data[0] = 0xC7;
@@ -411,7 +427,8 @@ namespace linkerbot::hand::o6::protocol {
             uint8_t target;
         };
         inline common::TransactionPlan write_config_set_id(const WriteConfigSetIdArguments &arguments) {
-            can::Message message;
+            can::Message message{};
+            message.format = can::FrameFormat::kClassic;
             message.id = arguments.id;
             message.dlc = 3;
             message.data[0] = 0xC3;
@@ -427,7 +444,8 @@ namespace linkerbot::hand::o6::protocol {
         return argument_detail::write_config_set_id({id, subcommand, target});
     }
     inline common::TransactionPlan write_config_restore_factory(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 8;
         for (auto &byte : message.data) {
@@ -439,7 +457,8 @@ namespace linkerbot::hand::o6::protocol {
         return plan;
     }
     inline common::TransactionPlan write_config_save(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 8;
         for (auto &byte : message.data) {
@@ -454,7 +473,8 @@ namespace linkerbot::hand::o6::protocol {
     // --- force sensor: per-finger 10-frame dot-matrix assembler (transaction-local) ---
 
     inline common::TransactionPlan read_force_sensor(uint32_t id, uint8_t prefix, const std::string &domain) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 2;
         message.data[0] = prefix;
@@ -525,7 +545,8 @@ namespace linkerbot::hand::o6::protocol {
                      "force_sensor_pinky"};
         plan.frames.reserve(kPrefixes.size());
         for (uint8_t prefix : kPrefixes) {
-            can::Message message;
+            can::Message message{};
+            message.format = can::FrameFormat::kClassic;
             message.id = id;
             message.dlc = 2;
             message.data[0] = prefix;
@@ -610,7 +631,8 @@ namespace linkerbot::hand::o6::protocol {
     // --- version: SN is a 4-frame ASCII assembler (transaction-local); others are single-frame ---
 
     inline common::TransactionPlan read_version_sn(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC0;
@@ -680,7 +702,8 @@ namespace linkerbot::hand::o6::protocol {
         return common::Progress::complete(Version{message.data[1], message.data[2], message.data[3]});
     }
     inline common::TransactionPlan read_version_pcb(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC1;
@@ -692,7 +715,8 @@ namespace linkerbot::hand::o6::protocol {
         return plan;
     }
     inline common::TransactionPlan read_version_firmware(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC2;
@@ -704,7 +728,8 @@ namespace linkerbot::hand::o6::protocol {
         return plan;
     }
     inline common::TransactionPlan read_version_mechanical(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC4;

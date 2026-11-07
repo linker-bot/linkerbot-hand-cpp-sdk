@@ -88,7 +88,8 @@ namespace linkerbot::hand::l20 {
                                                     const std::array<uint8_t, kJointCount> *raw) {
         std::vector<can::Message> messages;
         for (const auto &part : parts) {
-            can::Message msg;
+            can::Message msg{};
+            msg.format = can::FrameFormat::kClassic;
             msg.id = id;
             msg.dlc = raw ? static_cast<uint8_t>(1 + part.count) : 1;
             msg.data[0] = part.cmd;

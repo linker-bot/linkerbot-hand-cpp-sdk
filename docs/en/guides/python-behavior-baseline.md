@@ -9,13 +9,13 @@ acceptance has been completed. O20 is outside this change.
 ## Added native capabilities
 
 - L6 unified position Kp/Kd, torque Kd, torque output and limit compensation.
-  Configuration replies retain returned bytes, including previous values and
+  New L6 control setters and the added configuration getters reject malformed matching vector lengths. Existing native Manager defaults remain unchanged. Configuration replies retain returned bytes, including previous values and
   out-of-range evidence. Kp writes accept 0..200. Other added vectors accept
   six integer bytes. Torque output uses FIFO, including zero-valued transitions
   to position mode; it is never a latest target. Its default total budget is
-  300 ms, with a 20 ms pre-send guard and a 20 ms post-dispatch guard, or 150 ms when
+  300 ms, with a 20 ms endpoint-local pre-send guard and a 20 ms post-dispatch guard, or 150 ms when
   any joint value is zero. These are timing assumptions inherited from Python,
-  not new hardware measurements. The total budget remains bounded.
+  not new hardware measurements. An ACK can complete before the post-send guard ends; subsequent endpoint transactions wait. The guard is retained after a failed ACK and does not reserve the channel transmitter. Existing admission budgets still apply to subsequent commands.
 - `save_parameters_confirmed(timeout=200ms)` for Classic L6/O6. It writes eight
   CF bytes and requires exactly `CF 01`. Missing ACKs time out; malformed ACKs
   fail with ProtocolError. `save_parameters()` keeps its previous wire and
@@ -30,6 +30,8 @@ acceptance has been completed. O20 is outside this change.
   this layout; they are not advertised on the default mounted V36 path.
   Configuration ACKs are not published as configuration readback. Independent
   queries populate those caches. Angle ACKs publish actual state, not targets.
+
+`submit_operation(operation, timeout)` admits supported operations asynchronously through the same FIFO, including ACK-gated enable/disable and dispatch-only clear-faults. Identity reads are rejected before admission; use `get_device_info()`. This entry point lets a future binding avoid a separate Python executor while legacy operation methods keep their synchronous behavior.
 
 The new acknowledged operations share the existing per-device command executor
 and the existing Session send path. No Python send queue or second native
@@ -75,3 +77,5 @@ Still required before replacing the accepted Python implementation:
   persistence, calibration, torque-mode transitions and V25 device behavior.
 
 V25 requires an explicit side. Default request IDs are right `0x001` and left `0x002`, matching Python; `address` explicitly overrides them. The native mounted default is unchanged.
+
+Classic protocol constructors explicitly select classic CAN, including when their Session uses an FD-capable adapter. Offline wire vectors resolve flags using the FD-backend default; mixed-device hardware acceptance remains pending.

@@ -1,4 +1,5 @@
 #include "../detail/checked_optional.hpp"
+#include "detail/classic_response.hpp"
 #include "detail/model_adapters.hpp"
 
 #include <algorithm>
@@ -8,7 +9,6 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 
 #include <linkerbot/hand/errors.hpp>
@@ -107,10 +107,19 @@ namespace linkerbot::hand::unified_detail {
                 request);
         }
 
+        CommandOutcome l6_raw_write(l6::L6 &device, const CommandRequest &request, uint8_t opcode, const char *domain) {
+            const auto id = required_request_id(device.capabilities());
+            auto plan = l6::protocol::raw_control_transaction(id, opcode, domain,
+                                                              fixed_values<uint8_t, l6::kJointCount>(request));
+            return acknowledged_write(device, strict_classic_vector(std::move(plan), {id, opcode, l6::kJointCount}),
+                                      request);
+        }
+
         template <typename Device> CommandOutcome confirmed_save(Device &device, std::chrono::milliseconds timeout) {
             const auto id = required_request_id(device.capabilities());
             protocol::TransactionPlan plan;
             can::Message frame{};
+            frame.format = can::FrameFormat::kClassic;
             frame.id = id;
             frame.dlc = 8;
             std::fill_n(frame.data.begin(), 8, uint8_t{0xCF});
@@ -194,46 +203,20 @@ namespace linkerbot::hand::unified_detail {
         require_timeout(request);
         switch (request.semantic) {
         case CommandSemantic::kPositionKp:
-            device.position_kp.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
-            return {1, true};
+            return l6_raw_write(device, request, l6::kPositionKpOpcode, "position_kp");
         case CommandSemantic::kPositionKd:
-            device.position_kd.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
-            return {1, true};
+            return l6_raw_write(device, request, l6::kPositionKdOpcode, "position_kd");
         case CommandSemantic::kTorqueKd:
-            device.torque_kd.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
-            return {1, true};
+            return l6_raw_write(device, request, l6::kTorqueKdOpcode, "torque_kd");
         case CommandSemantic::kLimitCompensations:
-            device.limit_compensation.set_values(fixed_values<uint8_t, l6::kJointCount>(request), request.timeout);
-            return {1, true};
+            return l6_raw_write(device, request, l6::kLimitCompensationOpcode, "limit_compensations");
         case CommandSemantic::kTorques: {
             const auto id = required_request_id(device.capabilities());
             const auto raw = fixed_values<uint8_t, l6::kJointCount>(request);
             auto plan = with_response(l6::protocol::command(id, l6::kTorqueOpcode, {raw.begin(), raw.end()}),
                                       l6::protocol::read_telemetry(id, l6::kTorqueOpcode));
-            plan.initial_delay = std::chrono::milliseconds{20};
-            const auto outcome = acknowledged_write(device, std::move(plan), request);
-            const auto settle = std::find(raw.begin(), raw.end(), 0) != raw.end() ? std::chrono::milliseconds{150}
-                                                                                  : std::chrono::milliseconds{20};
-            auto dispatched_at = runtime::Clock::now();
-            if (request.completion) {
-                const auto receipts = request.completion->send_results();
-                if (!receipts.empty() && receipts.back().completed_at) {
-                    dispatched_at = ::linkerbot::hand::detail::checked_value(
-                        receipts.back().completed_at, "torque transition receipt has no completion timestamp");
-                }
-            }
-            const auto until = dispatched_at + settle;
-            while (runtime::Clock::now() < until) {
-                request.cancellation.throw_if_cancelled();
-                if (request.generation_valid && !request.generation_valid()) {
-                    throw ClosedError("torque transition generation ended");
-                }
-                if (request.deadline && runtime::Clock::now() >= *request.deadline) {
-                    throw TimeoutError("torque transition deadline expired");
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-            }
-            return outcome;
+            return acknowledged_write(
+                device, strict_classic_vector(std::move(plan), {id, l6::kTorqueOpcode, l6::kJointCount}), request);
         }
         case CommandSemantic::kAngles:
             device.angle.set_angles(fixed_values<uint8_t, l6::kJointCount>(request));

@@ -10,9 +10,7 @@ import sys
 from pathlib import Path
 
 BASELINE = "3a63e723b9a0046e9a60a58339b9f064ef5b70fd"
-SCENARIOS = ("l6_position_kp", "l6_position_kd", "l6_torque_kd", "l6_torques",
-             "l6_limit_compensations", "l6_save_confirmed", "o30_torque_limits",
-             "o30_motion_times", "l30_calibrate")
+SCENARIOS = ('l6_position_kp', 'l6_position_kd', 'l6_torque_kd', 'l6_torques', 'l6_limit_compensations', 'l6_save_confirmed', 'o30_angles', 'o30_speeds', 'o30_accelerations', 'o30_current_limits', 'o30_torque_limits', 'o30_motion_times', 'o30_stall_detection_times', 'o30_stall_thresholds', 'o30_stall_hold_currents', 'o30_read_angles', 'o30_read_measured_speeds', 'o30_read_configured_speeds', 'o30_read_configured_accelerations', 'o30_read_currents', 'o30_read_current_limits', 'o30_read_torques', 'o30_read_torque_limits', 'o30_read_motion_times', 'o30_read_temperatures', 'o30_read_voltages', 'o30_read_faults', 'o30_read_stall_detection_times', 'o30_read_stall_thresholds', 'o30_read_stall_hold_currents', 'l30_calibrate')
 
 
 def python_frames(sdk, scenario):
@@ -23,6 +21,7 @@ def python_frames(sdk, scenario):
     from linkerbot_hand.protocols.l6.transactions import L6ProtocolBackend
     from linkerbot_hand.protocols.l30.operations import operation_transaction
     from linkerbot_hand.protocols.o30.control import command_transaction
+    from linkerbot_hand.protocols.o30.telemetry import read_transaction
     from linkerbot_hand.protocols.o30.framing import HOPAddressing
     if scenario.startswith("l6_"):
         backend = L6ProtocolBackend(HandSide.LEFT)
@@ -32,8 +31,14 @@ def python_frames(sdk, scenario):
         else:
             semantic = getattr(CommandSemantic, scenario.removeprefix("l6_").upper())
             transaction = backend.command_transaction(semantic, tuple(range(1, 7)), caps)
+    elif scenario.startswith("o30_read_"):
+        from linkerbot_hand.capabilities.types import TelemetrySemantic
+        name = scenario.removeprefix("o30_read_")
+        semantic = getattr(TelemetrySemantic, "TORQUES_LIMITS" if name == "torque_limits" else name.upper())
+        transaction = read_transaction(semantic, get_declared_capabilities("O30", side="left"), HOPAddressing(1, 0x401))
     elif scenario.startswith("o30_"):
-        semantic = CommandSemantic.TORQUES_LIMITS if scenario.endswith("torque_limits") else CommandSemantic.MOTION_TIMES
+        name = scenario.removeprefix("o30_")
+        semantic = getattr(CommandSemantic, "TORQUES_LIMITS" if name == "torque_limits" else name.upper())
         transaction = command_transaction(semantic, tuple(range(1, 21)),
                                           get_declared_capabilities("O30", side="left"), HOPAddressing(1, 0x401))
     else:
@@ -42,11 +47,15 @@ def python_frames(sdk, scenario):
     while transaction:
         for message in transaction.request_messages:
             native_can = hasattr(message, "is_fd")
-            fd = bool(message.is_fd) if native_can else bool(message.frame_type & 0x04)
-            wire_length = message.dlc if native_can else (0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64)[message.dlc]
+            flags = 0x04 if getattr(message, "frame_type", None) is None else message.frame_type
+            fd = bool(message.is_fd) if native_can else bool(flags & 0x04)
+            lengths = (0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64)
+            wire_length = (message.dlc if native_can else
+                           lengths[message.dlc] if message.dlc is not None else
+                           next(length for length in lengths if length >= len(message.data)))
             frames.append({"id": message.arbitration_id, "fd": fd,
                            "extended": message.is_extended_id,
-                           "brs": bool(message.bitrate_switch) if native_can else bool(message.frame_type & 0x08),
+                           "brs": bool(message.bitrate_switch) if native_can else bool(flags & 0x08),
                            "data": list(bytes(message.data).ljust(wire_length, b"\0"))})
         transaction = transaction.next_transaction
     return frames

@@ -2,6 +2,7 @@
 #include "detail/o30_v25.hpp"
 
 #include "detail/command_handle_access.hpp"
+#include "detail/dispatch_guard.hpp"
 #include "detail/execution_gate.hpp"
 #include "detail/freshness.hpp"
 #include "detail/model_adapters.hpp"
@@ -70,11 +71,14 @@ namespace linkerbot::hand::unified_detail {
             explicit ModelBackend(std::unique_ptr<Device> device, std::shared_ptr<transport::Session> owned_session,
                                   const HandDeviceConfig &config)
                 : config_(config), capabilities_(declared_capabilities(config)), device_(std::move(device)),
-                  owned_session_(std::move(owned_session)), execution_gate_(std::make_shared<ExecutionGate>()) {
-                RuntimeAccess::set_polling_gate(*device_->runtime(),
-                                                [gate = execution_gate_](runtime::CancellationToken token) {
-                                                    return gate->acquire(false, runtime::Deadline::max(), token);
-                                                });
+                  owned_session_(std::move(owned_session)), execution_gate_(std::make_shared<ExecutionGate>()),
+                  dispatch_guard_(std::make_shared<DispatchGuard>()) {
+                RuntimeAccess::set_polling_gate(*device_->runtime(), [gate = execution_gate_, guard = dispatch_guard_](
+                                                                         runtime::CancellationToken token) {
+                    auto lease = gate->acquire(false, runtime::Deadline::max(), token);
+                    guard->wait(runtime::Deadline::max(), token);
+                    return lease;
+                });
             }
 
             [[nodiscard]] CommandHandle submit(const CommandRequest &request) override {
@@ -89,17 +93,33 @@ namespace linkerbot::hand::unified_detail {
                     static_cast<void>(validate_command_values(request.raw_values, *capability));
                 }
 
-                auto handle = request.completion
-                                  ? *request.completion
-                                  : CommandHandle{next_command_id(),
-                                                  request.operation ? CommandFamily::kDiscreteOperation
-                                                                    : command_family(request.semantic),
-                                                  request.operation ? AckSupport::kRequired : capability->ack_support,
-                                                  request.ack_expectation};
+                auto handle =
+                    request.completion
+                        ? *request.completion
+                        : CommandHandle{
+                              next_command_id(),
+                              request.operation ? CommandFamily::kDiscreteOperation : command_family(request.semantic),
+                              request.operation
+                                  ? (request.ack_expectation == AckExpectation::kRequired ? AckSupport::kRequired
+                                                                                          : AckSupport::kUnsupported)
+                                  : capability->ack_support,
+                              request.ack_expectation};
                 const auto deadline = request.deadline ? *request.deadline : runtime::deadline_after(request.timeout);
                 auto lease = execution_gate_->acquire(true, deadline, request.cancellation, request.generation_valid);
                 if (request.generation_valid && !request.generation_valid()) {
                     throw ClosedError("command generation ended before execution");
+                }
+                dispatch_guard_->wait(deadline, request.cancellation, request.generation_valid);
+                std::chrono::milliseconds settle{0};
+                if constexpr (std::is_same_v<Device, l6::L6>) {
+                    if (!request.operation && request.semantic == CommandSemantic::kTorques) {
+                        dispatch_guard_->reserve(runtime::Clock::now() + std::chrono::milliseconds{20});
+                        dispatch_guard_->wait(deadline, request.cancellation, request.generation_valid);
+                        settle = std::find(request.raw_values.begin(), request.raw_values.end(), 0.0) !=
+                                         request.raw_values.end()
+                                     ? std::chrono::milliseconds{150}
+                                     : std::chrono::milliseconds{20};
+                    }
                 }
                 struct Progress {
                     std::mutex mutex;
@@ -107,10 +127,17 @@ namespace linkerbot::hand::unified_detail {
                     bool active = true;
                 };
                 auto progress = std::make_shared<Progress>();
-                auto observe = [progress, handle, request, deadline](const transport::SendResult &sent,
-                                                                     bool final_send) mutable {
+                auto observe = [progress, handle, request, deadline, guard = dispatch_guard_,
+                                settle](const transport::SendResult &sent, bool final_send) mutable {
                     const std::lock_guard<std::mutex> lock(progress->mutex);
                     command_detail::CommandHandleAccess::record_send_result(handle, sent);
+                    if (settle.count() > 0) {
+                        if (sent.outcome == transport::SendOutcome::dispatched && !sent.error && sent.completed_at) {
+                            guard->finish_send(*sent.completed_at + settle);
+                        } else {
+                            guard->finish_send();
+                        }
+                    }
                     if (!progress->active || handle.done()) {
                         return;
                     }
@@ -134,8 +161,9 @@ namespace linkerbot::hand::unified_detail {
                 auto final_send = [this, operation = request.operation](const runtime::TransactionPlan &plan) {
                     if constexpr (std::is_same_v<Device, l30::L30>) {
                         if (operation == DeviceOperation::kCalibrate) {
-                            return !plan.frames.empty() && ((plan.frames.back().id >> 21U) & 0xFU) == 3U &&
-                                   ((plan.frames.back().id >> 13U) & 0xFFU) == 5U;
+                            return !plan.frames.empty() &&
+                                   ((plan.frames.back().id >> 21U) & 0xFU) == l30::protocol::kParentConfig &&
+                                   ((plan.frames.back().id >> 13U) & 0xFFU) == l30::protocol::kSubCalibrate;
                         }
                     }
                     if constexpr (std::is_same_v<Device, o30::O30>) {
@@ -171,7 +199,12 @@ namespace linkerbot::hand::unified_detail {
                             }
                             outcome = submit_command(*device_, bounded);
                         },
-                        [handle]() mutable { command_detail::CommandHandleAccess::reserve_send_result(handle); });
+                        [handle]() mutable { command_detail::CommandHandleAccess::reserve_send_result(handle); },
+                        [guard = dispatch_guard_, settle] {
+                            if (settle.count() > 0) {
+                                guard->begin_send();
+                            }
+                        });
                 } catch (...) {
                     deactivate();
                     throw;
@@ -204,6 +237,7 @@ namespace linkerbot::hand::unified_detail {
                 }
                 const auto deadline = runtime::deadline_after(timeout);
                 auto lease = execution_gate_->acquire(false, deadline);
+                dispatch_guard_->wait(deadline, {});
                 if constexpr (std::is_same_v<Device, o30::O30>) {
                     if (config_.o30_layout == O30Layout::kPythonV25 && semantic != TelemetrySemantic::kForce &&
                         semantic != TelemetrySemantic::kForceFns) {
@@ -229,6 +263,7 @@ namespace linkerbot::hand::unified_detail {
                                      acknowledged ? AckExpectation::kRequired : AckExpectation::kNone};
                 const auto deadline = runtime::deadline_after(timeout);
                 auto lease = execution_gate_->acquire(false, deadline);
+                dispatch_guard_->wait(deadline, {});
                 const auto outcome = operate_device(*device_, operation, runtime::remaining(deadline));
                 command_detail::CommandHandleAccess::mark_dispatched(handle, outcome.sent_frames);
                 if (acknowledged) {
@@ -355,6 +390,7 @@ namespace linkerbot::hand::unified_detail {
             std::unique_ptr<Device> device_;
             std::shared_ptr<transport::Session> owned_session_;
             std::shared_ptr<ExecutionGate> execution_gate_;
+            std::shared_ptr<DispatchGuard> dispatch_guard_;
         };
 
         template <typename Device, size_t JointCount>

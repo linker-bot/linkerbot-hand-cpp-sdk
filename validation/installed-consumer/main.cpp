@@ -68,6 +68,7 @@ namespace {
         validation::require(handle.stage() == linkerbot::hand::CommandStage::kDispatched,
                             "installed no-ACK command has wrong terminal stage");
         validation::complete(device.hand.set_stall_thresholds(std::vector<double>(6, 10)));
+        validation::complete(device.hand.submit_operation(linkerbot::hand::DeviceOperation::kClearFaults));
         validation::complete(device.hand.set_position_kp(std::vector<double>(6, 50)));
         validation::require(device.hand.get_snapshot().position_kp.has_value(), "installed gain snapshot missing");
         device.transport->on_request(0x28, [](const auto &request) {

@@ -538,6 +538,7 @@ namespace linkerbot::hand::runtime {
             unified_detail::RuntimeAccess::SendObserver observer;
             unified_detail::RuntimeAccess::FinalSend final_send;
             std::function<void()> prepare_send;
+            std::function<void()> accepted_send;
         };
         std::map<std::thread::id, CommandExecution> command_executions;
         struct SendAudit {
@@ -1441,6 +1442,10 @@ namespace linkerbot::hand::runtime {
                     {std::move(audit_domain),
                      ::linkerbot::hand::detail::checked_value(state->receipt, "missing runtime state: state->receipt"),
                      std::move(send_observer), final_send});
+                if (const auto execution = p.command_executions.find(state->owner);
+                    execution != p.command_executions.end() && execution->second.accepted_send) {
+                    execution->second.accepted_send();
+                }
                 p.reap_locked();
             } catch (...) {
                 p.finish_locked(state, std::current_exception(), true);
@@ -2511,19 +2516,18 @@ void linkerbot::hand::unified_detail::RuntimeAccess::set_polling_gate(runtime::D
     runtime.impl_->polling_gate = std::move(gate);
 }
 
-void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(runtime::DeviceRuntime &runtime,
-                                                                     runtime::Deadline deadline, bool send_only,
-                                                                     SendObserver observer, FinalSend final_send,
-                                                                     runtime::CancellationToken cancellation,
-                                                                     const std::function<void()> &execute,
-                                                                     std::function<void()> prepare_send) {
+void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(
+    runtime::DeviceRuntime &runtime, runtime::Deadline deadline, bool send_only, SendObserver observer,
+    FinalSend final_send, runtime::CancellationToken cancellation, const std::function<void()> &execute,
+    std::function<void()> prepare_send, std::function<void()> accepted_send) {
     struct SendCallbacks {
         SendObserver &observer;
         FinalSend &final_send;
         const std::function<void()> &execute;
         std::function<void()> &prepare_send;
+        std::function<void()> &accepted_send;
     };
-    const auto callbacks = SendCallbacks{observer, final_send, execute, prepare_send};
+    const auto callbacks = SendCallbacks{observer, final_send, execute, prepare_send, accepted_send};
     const auto owner = std::this_thread::get_id();
     auto &p = *runtime.impl_;
     std::optional<runtime::DeviceRuntime::Impl::CommandExecution> previous;
@@ -2535,7 +2539,8 @@ void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(runtime::De
         p.command_executions.insert_or_assign(owner,
                                               runtime::DeviceRuntime::Impl::CommandExecution{
                                                   send_only, deadline, cancellation, std::move(callbacks.observer),
-                                                  std::move(callbacks.final_send), std::move(callbacks.prepare_send)});
+                                                  std::move(callbacks.final_send), std::move(callbacks.prepare_send),
+                                                  std::move(callbacks.accepted_send)});
     }
     const auto restore = [&] {
         const std::lock_guard<std::mutex> lock(p.mutex);

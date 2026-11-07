@@ -39,6 +39,18 @@ namespace linkerbot::hand {
                     channel.freshness_ms = 3000;
                     result.telemetry.push_back(std::move(channel));
                 }
+                // Mounted revisions use different wire indices. Do not carry
+                // their index notes into an explicitly selected V25 profile.
+                for (auto &command : result.commands) {
+                    command.raw_scale_note = "compact V25 write; ACK is not independent configuration readback";
+                }
+                for (auto &channel : result.telemetry) {
+                    if (channel.semantic != TelemetrySemantic::kForce) {
+                        channel.raw_scale_note = channel.device_measured
+                                                     ? "compact V25 actual value"
+                                                     : "compact V25 configured value; queried independently";
+                    }
+                }
             }
             return result;
         }

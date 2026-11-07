@@ -112,7 +112,8 @@ namespace linkerbot::hand::l20::protocol {
         });
     }
     inline common::TransactionPlan read_force_sensor(uint32_t id, uint8_t prefix, const std::string &domain) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 2;
         message.data[0] = prefix;
@@ -189,7 +190,8 @@ namespace linkerbot::hand::l20::protocol {
                      "force_sensor_pinky"};
         plan.frames.reserve(kPrefixes.size());
         for (uint8_t prefix : kPrefixes) {
-            can::Message message;
+            can::Message message{};
+            message.format = can::FrameFormat::kClassic;
             message.id = id;
             message.dlc = 2;
             message.data[0] = prefix;
@@ -277,7 +279,8 @@ namespace linkerbot::hand::l20::protocol {
     }
 
     inline common::TransactionPlan read_version_sn(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC0;
@@ -347,7 +350,8 @@ namespace linkerbot::hand::l20::protocol {
         return common::Progress::complete(Version{message.data[1], message.data[2], message.data[3]});
     }
     inline common::TransactionPlan read_version_pcb(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC1;
@@ -359,7 +363,8 @@ namespace linkerbot::hand::l20::protocol {
         return plan;
     }
     inline common::TransactionPlan read_version_firmware(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC2;
@@ -371,7 +376,8 @@ namespace linkerbot::hand::l20::protocol {
         return plan;
     }
     inline common::TransactionPlan read_version_mechanical(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC4;

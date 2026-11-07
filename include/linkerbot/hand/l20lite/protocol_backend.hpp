@@ -104,11 +104,13 @@ namespace linkerbot::hand::l20lite::protocol {
     inline common::TransactionPlan
     read_dual_frame(uint32_t id, FramePart part_a, FramePart part_b, std::string domain, std::chrono::microseconds gap,
                     std::function<common::Progress(const std::array<uint8_t, kJointCount> &)> finish) {
-        can::Message message_a;
+        can::Message message_a{};
+        message_a.format = can::FrameFormat::kClassic;
         message_a.id = id;
         message_a.dlc = 1;
         message_a.data[0] = part_a.cmd;
-        can::Message message_b;
+        can::Message message_b{};
+        message_b.format = can::FrameFormat::kClassic;
         message_b.id = id;
         message_b.dlc = 1;
         message_b.data[0] = part_b.cmd;
@@ -125,14 +127,16 @@ namespace linkerbot::hand::l20lite::protocol {
     inline common::TransactionPlan write_dual_frame(uint32_t id, const FramePart &part_a, const FramePart &part_b,
                                                     const std::string &domain, std::chrono::microseconds gap,
                                                     const std::array<uint8_t, kJointCount> &raw) {
-        can::Message message_a;
+        can::Message message_a{};
+        message_a.format = can::FrameFormat::kClassic;
         message_a.id = id;
         message_a.dlc = static_cast<uint8_t>(1 + part_a.count);
         message_a.data[0] = part_a.cmd;
         for (size_t i = 0; i < part_a.count; ++i) {
             message_a.data[i + 1] = raw[part_a.joints[i]];
         }
-        can::Message message_b;
+        can::Message message_b{};
+        message_b.format = can::FrameFormat::kClassic;
         message_b.id = id;
         message_b.dlc = static_cast<uint8_t>(1 + part_b.count);
         message_b.data[0] = part_b.cmd;
@@ -273,7 +277,8 @@ namespace linkerbot::hand::l20lite::protocol {
             const std::array<uint8_t, kJointCount> &raw;
         };
         inline std::array<can::Message, 2> build_stall_bank_frames(const BuildStallBankFramesArguments &arguments) {
-            can::Message bank1;
+            can::Message bank1{};
+            bank1.format = can::FrameFormat::kClassic;
             bank1.id = arguments.id;
             bank1.dlc = 7;
             bank1.data[0] = arguments.cmd;
@@ -281,7 +286,8 @@ namespace linkerbot::hand::l20lite::protocol {
             for (size_t i = 0; i < 5; ++i) {
                 bank1.data[i + 2] = arguments.raw[i];
             }
-            can::Message bank2;
+            can::Message bank2{};
+            bank2.format = can::FrameFormat::kClassic;
             bank2.id = arguments.id;
             bank2.dlc = 7;
             bank2.data[0] = arguments.cmd;
@@ -380,7 +386,8 @@ namespace linkerbot::hand::l20lite::protocol {
     // stall time command 0xC6 (which appears as data[0] of a dlc=7 message). ---
 
     inline common::TransactionPlan read_force_sensor(uint32_t id, uint8_t prefix, const std::string &domain) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 2;
         message.data[0] = prefix;
@@ -457,7 +464,8 @@ namespace linkerbot::hand::l20lite::protocol {
                      "force_sensor_pinky"};
         plan.frames.reserve(kPrefixes.size());
         for (uint8_t prefix : kPrefixes) {
-            can::Message message;
+            can::Message message{};
+            message.format = can::FrameFormat::kClassic;
             message.id = id;
             message.dlc = 2;
             message.data[0] = prefix;
@@ -548,7 +556,8 @@ namespace linkerbot::hand::l20lite::protocol {
     // (offsets 0/6/12 mandatory, 18 optional); others are single-frame. ---
 
     inline common::TransactionPlan read_version_sn(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC0;
@@ -624,7 +633,8 @@ namespace linkerbot::hand::l20lite::protocol {
         return common::Progress::complete(Version{message.data[1], message.data[2], message.data[3]});
     }
     inline common::TransactionPlan read_version_pcb(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC1;
@@ -636,7 +646,8 @@ namespace linkerbot::hand::l20lite::protocol {
         return plan;
     }
     inline common::TransactionPlan read_version_firmware(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC2;
@@ -648,7 +659,8 @@ namespace linkerbot::hand::l20lite::protocol {
         return plan;
     }
     inline common::TransactionPlan read_version_mechanical(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = 0xC4;
@@ -664,7 +676,8 @@ namespace linkerbot::hand::l20lite::protocol {
     // byte); reply_enabled/restore_factory/save are fire-and-forget 7-byte fills. ---
 
     inline common::TransactionPlan read_config_set_id(uint32_t id, uint8_t mode, uint8_t target) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 3;
         message.data[0] = 0xC3;
@@ -688,7 +701,8 @@ namespace linkerbot::hand::l20lite::protocol {
         return plan;
     }
     inline common::TransactionPlan write_config_reply_enabled(uint32_t id, bool enabled) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         for (auto &byte : message.data) {
@@ -702,7 +716,8 @@ namespace linkerbot::hand::l20lite::protocol {
         return plan;
     }
     inline common::TransactionPlan write_config_restore_factory(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         for (auto &byte : message.data) {
@@ -715,7 +730,8 @@ namespace linkerbot::hand::l20lite::protocol {
         return plan;
     }
     inline common::TransactionPlan write_config_save(uint32_t id) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 7;
         for (auto &byte : message.data) {
@@ -749,7 +765,8 @@ namespace linkerbot::hand::l20lite::protocol {
         return common::Progress::complete(raw);
     }
     inline common::TransactionPlan read_tip_channel(uint32_t id, uint8_t cmd, const std::string &domain) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = cmd;
@@ -770,7 +787,8 @@ namespace linkerbot::hand::l20lite::protocol {
             TipFinger{message.data[1], message.data[2], message.data[3], message.data[4]});
     }
     inline common::TransactionPlan read_tip_finger(uint32_t id, uint8_t cmd, const std::string &domain) {
-        can::Message message;
+        can::Message message{};
+        message.format = can::FrameFormat::kClassic;
         message.id = id;
         message.dlc = 1;
         message.data[0] = cmd;
@@ -788,7 +806,8 @@ namespace linkerbot::hand::l20lite::protocol {
         plan.preserve_last_success = true;
         plan.keys = {"tip_force_normal", "tip_force_tangential", "tip_force_direction", "tip_force_proximity"};
         for (uint8_t cmd = 0x20; cmd <= 0x23; ++cmd) {
-            can::Message m;
+            can::Message m{};
+            m.format = can::FrameFormat::kClassic;
             m.id = id;
             m.dlc = 1;
             m.data[0] = cmd;

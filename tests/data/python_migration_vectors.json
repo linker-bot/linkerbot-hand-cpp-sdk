@@ -106,6 +106,174 @@
         ]
       }
     ],
+    "o30_angles": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          1,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "o30_speeds": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          2,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "o30_accelerations": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          3,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "o30_current_limits": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          132,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
     "o30_torque_limits": [
       {
         "id": 1,
@@ -187,6 +355,327 @@
           0,
           0,
           0
+        ]
+      }
+    ],
+    "o30_stall_detection_times": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          9,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "o30_stall_thresholds": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          10,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "o30_stall_hold_currents": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          11,
+          0,
+          25,
+          1,
+          0,
+          0,
+          0,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          0,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "o30_read_angles": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          1,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_measured_speeds": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          2,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_configured_speeds": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          130,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_configured_accelerations": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          131,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_currents": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          4,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_current_limits": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          132,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_torques": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          6,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_torque_limits": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          134,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_motion_times": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          136,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_temperatures": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          7,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_voltages": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          5,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_faults": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          12,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_stall_detection_times": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          137,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_stall_thresholds": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          138,
+          0,
+          25
+        ]
+      }
+    ],
+    "o30_read_stall_hold_currents": [
+      {
+        "id": 1,
+        "fd": true,
+        "extended": false,
+        "brs": false,
+        "data": [
+          139,
+          0,
+          25
         ]
       }
     ],

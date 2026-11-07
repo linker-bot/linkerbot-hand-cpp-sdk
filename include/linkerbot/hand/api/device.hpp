@@ -125,6 +125,11 @@ namespace linkerbot::hand {
         [[nodiscard]] LimitCompensationSample
         get_limit_compensations(std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
 
+        // Nonblocking operation admission through the same FIFO as setters.
+        // Read-device-info is not an operation handle; use get_device_info().
+        // Legacy operation methods below retain their existing synchronous behavior.
+        [[nodiscard]] CommandHandle
+        submit_operation(DeviceOperation operation, std::chrono::milliseconds timeout = std::chrono::milliseconds{100});
         [[nodiscard]] CommandHandle clear_faults();
         [[nodiscard]] CommandHandle enable();
         [[nodiscard]] CommandHandle disable();

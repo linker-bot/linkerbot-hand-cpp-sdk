@@ -16,9 +16,10 @@ namespace linkerbot::hand::unified_detail {
         // runtime lock and must never call back into runtime/facade state.
         // prepare_send runs before request accounting and physical admission;
         // failures reject that batch without I/O. Reserve observer storage here.
+        // accepted_send runs only after the receipt and terminal observer are installed.
         static void execute_command(runtime::DeviceRuntime &runtime, runtime::Deadline deadline, bool send_only,
                                     SendObserver observer, FinalSend final_send,
                                     runtime::CancellationToken cancellation, const std::function<void()> &execute,
-                                    std::function<void()> prepare_send = {});
+                                    std::function<void()> prepare_send = {}, std::function<void()> accepted_send = {});
     };
 }

@@ -428,7 +428,10 @@ namespace linkerbot::hand {
             const auto *capability = context.capabilities.command(request.semantic);
             const auto family = request.operation ? CommandFamily::kDiscreteOperation
                                                   : unified_detail::command_family(request.semantic);
-            const auto support = request.operation ? AckSupport::kRequired : capability->ack_support;
+            const auto support = request.operation
+                                     ? (request.ack_expectation == AckExpectation::kRequired ? AckSupport::kRequired
+                                                                                             : AckSupport::kUnsupported)
+                                     : capability->ack_support;
             request.generation_valid = [this, context] {
                 return context.generation == generation_.load(std::memory_order_acquire) &&
                        state_.load(std::memory_order_acquire) == State::kReady;
@@ -490,8 +493,8 @@ namespace linkerbot::hand {
         [[nodiscard]] CommandHandle enqueue_operation(DeviceOperation operation, std::chrono::milliseconds timeout,
                                                       const char *name) {
             const auto context = capture(name);
-            if (!context.capabilities.supports(operation)) {
-                throw UnsupportedOperationError("operation is unsupported");
+            if (operation == DeviceOperation::kReadDeviceInfo || !context.capabilities.supports(operation)) {
+                throw UnsupportedOperationError("operation is unsupported; use get_device_info for identity reads");
             }
             if (timeout.count() <= 0) {
                 throw ValidationError("operation timeout must be positive");
@@ -499,7 +502,9 @@ namespace linkerbot::hand {
             unified_detail::CommandRequest request;
             request.operation = operation;
             request.timeout = timeout;
-            request.ack_expectation = AckExpectation::kRequired;
+            request.ack_expectation = context.capabilities.operations.acknowledged(operation)
+                                          ? AckExpectation::kRequired
+                                          : AckExpectation::kNone;
             return enqueue(context, std::move(request), name);
         }
 
@@ -929,6 +934,10 @@ namespace linkerbot::hand {
     LINKERBOT_HAND_DEFINE_OPERATION(enable, kEnable)
     LINKERBOT_HAND_DEFINE_OPERATION(disable, kDisable)
     LINKERBOT_HAND_DEFINE_OPERATION(save_parameters, kSaveParameters)
+    CommandHandle HandDevice::submit_operation(DeviceOperation operation, std::chrono::milliseconds timeout) {
+        return impl_->enqueue_operation(operation, timeout, "submit_operation");
+    }
+
     CommandHandle HandDevice::save_parameters_confirmed(std::chrono::milliseconds timeout) {
         return impl_->enqueue_operation(DeviceOperation::kSaveParametersConfirmed, timeout,
                                         "save_parameters_confirmed");

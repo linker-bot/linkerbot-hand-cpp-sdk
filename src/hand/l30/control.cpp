@@ -34,8 +34,9 @@ namespace linkerbot::hand::l30 {
         const auto unlock = client_->request_ack(protocol::kParentConfig, protocol::kSubConfigUnlock,
                                                  {6, 0, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC}, 12, operation.remaining());
         protocol::check_response_status(unlock.data(), unlock.size());
-        const auto response = client_->request_ack(protocol::kParentConfig, 0x05, protocol::empty_request_payload(),
-                                                   protocol::kEmptyRequestBytes, operation.remaining());
+        const auto response =
+            client_->request_ack(protocol::kParentConfig, protocol::kSubCalibrate, protocol::empty_request_payload(),
+                                 protocol::kEmptyRequestBytes, operation.remaining());
         protocol::check_response_status(response.data(), response.size());
     }
 } // namespace linkerbot::hand::l30
