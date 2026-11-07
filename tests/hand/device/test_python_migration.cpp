@@ -382,7 +382,11 @@ TEST_CASE("generic operation admission shares the setter FIFO without changing l
     REQUIRE((pending.ack_expectation() == AckExpectation::kNone));
     REQUIRE_THROWS_AS(device.hand.submit_operation(DeviceOperation::kClearFaults, 2s), QueueFullError);
     REQUIRE_THROWS_AS(device.hand.submit_operation(DeviceOperation::kReadDeviceInfo), UnsupportedOperationError);
-    REQUIRE_THROWS_AS(device.hand.submit_operation(static_cast<DeviceOperation>(255)), UnsupportedOperationError);
+    // A fixed-underlying enum can represent every uint8_t value in C++17.
+    // Exercise rejection of an unknown operation, not an out-of-range integer conversion.
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+    const auto unknown_operation = static_cast<DeviceOperation>(255);
+    REQUIRE_THROWS_AS(device.hand.submit_operation(unknown_operation), UnsupportedOperationError);
     device.transport->release_tx_gate();
     validation::complete(blocking);
     validation::complete(pending);
