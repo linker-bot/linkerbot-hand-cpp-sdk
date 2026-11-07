@@ -1,6 +1,7 @@
 #include "../../../src/hand/unified/detail/read_coordinator.hpp"
 #include "../../../validation/fake_classic_hand.hpp"
 #include "hand/support/optional_value.hpp"
+#include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <future>
@@ -15,6 +16,7 @@ namespace {
         auto config = validation::config();
         config.runtime_behavior = RuntimeBehavior::kPython;
         config.response_timeout = 100ms;
+        config.identity_timeout = 100ms;
         return config;
     }
 }
@@ -49,7 +51,7 @@ TEST_CASE("Python response window starts after a delayed physical send", "[comm]
     validation::FakeHand device(config);
     auto command = device.block();
     auto pending = device.hand.set_angles(std::vector<int32_t>(6, 20));
-    std::this_thread::sleep_for(40ms);
+    std::this_thread::sleep_for(150ms);
     const bool active_done = command.done();
     const bool pending_done = pending.done();
     device.transport->release_tx_gate();
@@ -131,6 +133,8 @@ TEST_CASE("Python invalid runtime configuration is rejected before transport con
     for (unsigned invalid = 0; invalid < 3; ++invalid) {
         auto config = python_config();
         if (invalid == 0) {
+            // Deliberately exercise rejection of an invalid configuration enum.
+            // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
             config.runtime_behavior = static_cast<RuntimeBehavior>(99);
         } else if (invalid == 1) {
             config.read_waiter_capacity = 0;
@@ -151,6 +155,7 @@ TEST_CASE("Python invalid runtime configuration is rejected before transport con
 TEST_CASE("Python recovery retries only lost responses without reopening the backend again", "[comm][python-phase2]") {
     auto config = python_config();
     config.response_timeout = 20ms;
+    config.identity_timeout = 20ms;
     config.recovery_quiet = 20ms;
     config.recovery_attempts = 3;
     std::atomic<int> factories{0};
@@ -309,6 +314,7 @@ TEST_CASE("Python recovery loss has a finite attempt count and cannot publish a 
           "[comm][python-phase2]") {
     auto config = python_config();
     config.response_timeout = 20ms;
+    config.identity_timeout = 20ms;
     config.recovery_quiet = 20ms;
     config.recovery_attempts = 3;
     std::atomic<int> factories{0};
@@ -339,6 +345,7 @@ TEST_CASE("Python recovery loss has a finite attempt count and cannot publish a 
 TEST_CASE("Python recovery quiet periods cannot extend the execution budget", "[comm][python-phase2]") {
     auto config = python_config();
     config.response_timeout = 20ms;
+    config.identity_timeout = 20ms;
     config.recovery_quiet = 1s;
     config.recovery_timeout = 80ms;
     config.recovery_attempts = 3;
@@ -449,4 +456,90 @@ TEST_CASE("Python close cannot start an abandoned read after the claimed command
     REQUIRE((sent.size() == 1));
     REQUIRE((sent.front().dlc == 7));
     session->close();
+}
+
+TEST_CASE("Python unclaimed reads with no remaining callers do not send after the command lane becomes free",
+          "[comm][python-phase2]") {
+    validation::FakeHand device(python_config());
+    device.transport->clear_sent();
+    auto claimed = device.block();
+    bool timed_out = false;
+    try {
+        (void)device.hand.get_angles(10ms);
+    } catch (const TimeoutError &) {
+        timed_out = true;
+    }
+    device.transport->release_tx_gate();
+    validation::complete(claimed);
+    // A later identity transaction also drains prior read coordination work.
+    (void)device.hand.refresh_device_info(1s);
+    const auto sent = device.transport->sent();
+    const auto queries = std::count_if(sent.begin(), sent.end(),
+                                       [](const auto &message) { return message.data[0] == 1 && message.dlc == 1; });
+    REQUIRE((timed_out));
+    REQUIRE((queries == 0));
+    REQUIRE((device.hand.is_open()));
+}
+
+TEST_CASE("Python poll demand survives its internal waiter timeout while the device lane is busy",
+          "[comm][python-phase2]") {
+    struct State {
+        std::promise<void> polled;
+        std::atomic<bool> observed{false};
+    };
+    const auto state = std::make_shared<State>();
+    auto polled = state->polled.get_future();
+    validation::FakeHand device(python_config());
+    device.transport->on_request(0x28, [state](const auto &request) {
+        if (request.data[0] == 1 && request.dlc == 1 && !state->observed.exchange(true)) {
+            state->polled.set_value();
+        }
+        return validation::l6_reply(request);
+    });
+    auto claimed = device.block();
+    device.hand.start_polling({{TelemetrySemantic::kAngles, 2s}});
+    std::this_thread::sleep_for(150ms); // Longer than the internal 100 ms poll wait.
+    device.transport->release_tx_gate();
+    validation::complete(claimed);
+    const auto progressed = polled.wait_for(500ms);
+    device.hand.stop_polling();
+    device.hand.close();
+    REQUIRE((progressed == std::future_status::ready));
+}
+
+TEST_CASE("Python identity response windows are independent of the ordinary transaction override",
+          "[comm][python-phase2]") {
+    struct State {
+        std::atomic<bool> delay{false};
+        std::promise<void> requested;
+        std::vector<linkerbot::can::Message> replies;
+    };
+    const auto state = std::make_shared<State>();
+    auto requested = state->requested.get_future();
+    auto config = python_config();
+    config.response_timeout = 20ms;
+    config.identity_timeout = 300ms;
+    validation::FakeHand device(config);
+    device.transport->on_request(0x28, [state](const auto &request) {
+        auto replies = validation::l6_reply(request);
+        if (state->delay.load() && request.data[0] == 0xC0) {
+            state->replies = std::move(replies);
+            state->requested.set_value();
+            return std::vector<linkerbot::can::Message>{};
+        }
+        return replies;
+    });
+    state->delay.store(true);
+    auto refreshing = std::async(std::launch::async, [&] { return device.hand.refresh_device_info(1s); });
+    const auto entered = requested.wait_for(1s);
+    std::this_thread::sleep_for(100ms);
+    if (entered == std::future_status::ready) {
+        for (const auto &reply : state->replies) {
+            device.transport->inject(reply);
+        }
+    }
+    const auto identity = refreshing.get();
+    device.hand.close();
+    REQUIRE((entered == std::future_status::ready));
+    REQUIRE((identity.model == Model::kL6));
 }

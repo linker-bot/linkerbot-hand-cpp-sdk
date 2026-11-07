@@ -75,6 +75,9 @@ namespace linkerbot::hand::unified_detail {
                 std::any_of(code.begin(), code.end(), [](unsigned char value) { return value > 127; })) {
                 throw ProtocolError("factory product code must be nonempty ASCII");
             }
+            // Progress owns the moved string through std::any; the analyzer
+            // does not model the type-erased owner's eventual destruction.
+            // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
             return protocol::Progress::complete(std::move(code));
         };
     }

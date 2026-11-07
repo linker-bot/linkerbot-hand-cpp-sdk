@@ -371,6 +371,7 @@ namespace linkerbot::hand::runtime {
         bool command_terminal = false;
         bool return_after_send = false;
         bool scoped_command = false;
+        bool scoped_response_policy = false;
         bool response_deadline_armed = false;
         bool response_window_expiry = false;
         std::optional<Deadline> receipt_response_deadline() const {
@@ -425,7 +426,9 @@ namespace linkerbot::hand::runtime {
             throw ValidationError("empty runtime request");
         }
         std::unique_lock<std::mutex> lock(state_->mutex);
-        if (!wait_for_state(state_->cv, lock, std::min(deadline, state_->deadline),
+        const auto wait_deadline =
+            state_->scoped_response_policy ? Deadline::max() : std::min(deadline, state_->deadline);
+        if (!wait_for_state(state_->cv, lock, wait_deadline,
                             [&] { return state_->done || (state_->return_after_send && state_->sent_result); })) {
             lock.unlock();
             if (state_->expire) {
@@ -459,7 +462,9 @@ namespace linkerbot::hand::runtime {
             throw ValidationError("empty runtime request");
         }
         std::unique_lock<std::mutex> lock(state_->mutex);
-        if (!wait_for_state(state_->cv, lock, std::min(deadline, state_->deadline),
+        const auto wait_deadline =
+            state_->scoped_response_policy ? Deadline::max() : std::min(deadline, state_->deadline);
+        if (!wait_for_state(state_->cv, lock, wait_deadline,
                             [&] { return state_->done || state_->sent_result.has_value(); })) {
             lock.unlock();
             if (state_->expire) {
@@ -1032,8 +1037,24 @@ namespace linkerbot::hand::runtime {
             bool matched = false;
             const auto requests = pending;
             for (const auto &state : requests) {
-                if (!state->plan.consume || state->response || state->buffered_error ||
-                    input.received_at >= state->deadline || input.received_at < state->receipt->result().accepted_at) {
+                if (!state->plan.consume || input.received_at >= state->deadline ||
+                    input.received_at < state->receipt->result().accepted_at) {
+                    continue;
+                }
+                if (state->response || state->buffered_error) {
+                    if (state->plan.defer_errors_until_send) {
+                        // This request still owns its response domain while the
+                        // send is pending. Matching frames are not reports.
+                        try {
+                            if (state->plan.consume(input.message).kind != protocol::ProgressKind::unmatched) {
+                                matched = true;
+                                break;
+                            }
+                        } catch (...) {
+                            matched = true;
+                            break;
+                        }
+                    }
                     continue;
                 }
                 try {
@@ -1392,6 +1413,7 @@ namespace linkerbot::hand::runtime {
         state->deadline = deadline;
         state->external = cancellation;
         state->generation_valid = std::move(generation_valid);
+        state->scoped_response_policy = response_policies.count(this) != 0;
         state->owner = std::this_thread::get_id();
         auto &p = *impl_;
         {

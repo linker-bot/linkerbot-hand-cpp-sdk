@@ -1,12 +1,14 @@
 #pragma once
 
 #include "../../detail/checked_optional.hpp"
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <exception>
 #include <functional>
 #include <linkerbot/hand/errors.hpp>
+#include <linkerbot/transport/cancellation.hpp>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -36,7 +38,15 @@ namespace linkerbot::hand::unified_detail {
         ReadCoordinator(const ReadCoordinator &) = delete;
         ReadCoordinator &operator=(const ReadCoordinator &) = delete;
 
+        using Prepare = std::function<std::shared_ptr<void>(const std::function<bool()> &)>;
+        using Execute = std::function<Value(const std::shared_ptr<void> &)>;
         Value read(unsigned key, Clock::time_point deadline, std::function<Value()> execute, bool polling = false) {
+            return read_prepared(
+                key, deadline, [execute = std::move(execute)](const std::shared_ptr<void> &) { return execute(); }, {},
+                polling);
+        }
+        Value read_prepared(unsigned key, Clock::time_point deadline, Execute execute, Prepare prepare,
+                            bool polling = false, transport::CancellationToken poll_cancel = {}) {
             std::unique_lock<std::mutex> lock(mutex_);
             if (!accepting_) {
                 throw ClosedError("read generation ended");
@@ -52,6 +62,8 @@ namespace linkerbot::hand::unified_detail {
             if (found == entries_.end()) {
                 entry = std::make_shared<Entry>();
                 entry->execute = std::move(execute);
+                entry->prepare = std::move(prepare);
+                entry->generation = generation_;
                 // Install the queue first so allocation failure cannot leave an
                 // entry that no worker can ever claim.
                 queue_.push_back({key, entry});
@@ -67,8 +79,12 @@ namespace linkerbot::hand::unified_detail {
             const auto generation = generation_;
             if (!polling) {
                 ++waiters_;
+                ++entry->waiters;
+                entry->last_waiter_deadline = std::max(entry->last_waiter_deadline, deadline);
+            } else {
+                entry->requested_by_poll = true;
+                entry->poll_cancel = std::move(poll_cancel);
             }
-            ++entry->waiters;
             changed_.notify_all();
             bool completed = true;
             if (deadline == Clock::time_point::max()) {
@@ -76,12 +92,16 @@ namespace linkerbot::hand::unified_detail {
             } else {
                 completed = changed_.wait_until(lock, deadline, [&] { return entry->done; });
             }
-            if (!polling && generation == generation_) {
-                --waiters_;
+            if (!polling) {
+                if (generation == generation_) {
+                    --waiters_;
+                }
+                --entry->waiters;
             }
-            --entry->waiters;
-            if (!entry->done && !entry->claimed && entry->waiters == 0) {
-                entries_.erase(key);
+            if (!entry->done && !entry->claimed && !demand_locked(*entry)) {
+                if (const auto it = entries_.find(key); it != entries_.end() && it->second == entry) {
+                    entries_.erase(it);
+                }
                 for (auto it = queue_.begin(); it != queue_.end(); ++it) {
                     if (it->second == entry) {
                         queue_.erase(it);
@@ -164,13 +184,23 @@ namespace linkerbot::hand::unified_detail {
             return capacity;
         }
         struct Entry {
-            std::function<Value()> execute;
+            Execute execute;
+            Prepare prepare;
+            transport::CancellationToken poll_cancel;
+            bool requested_by_poll = false;
+            uint64_t generation = 0;
             std::optional<Value> value;
             std::exception_ptr error;
             bool done = false;
             bool claimed = false;
             size_t waiters = 0;
+            Clock::time_point last_waiter_deadline = Clock::time_point::min();
         };
+        bool demand_locked(const Entry &entry) const {
+            return accepting_ && !entry.done && entry.generation == generation_ &&
+                   (entry.claimed || (entry.waiters != 0 && Clock::now() < entry.last_waiter_deadline) ||
+                    (entry.requested_by_poll && !entry.poll_cancel.cancelled()));
+        }
         void run() {
             std::unique_lock<std::mutex> lock(mutex_);
             while (!stopping_) {
@@ -181,15 +211,32 @@ namespace linkerbot::hand::unified_detail {
                 auto [key, entry] = std::move(queue_.front());
                 queue_.pop_front();
                 active_ = true;
-                entry->claimed = true;
                 lock.unlock();
                 std::optional<Value> value;
                 std::exception_ptr error;
+                std::shared_ptr<void> lease;
                 try {
-                    value.emplace(entry->execute());
+                    const auto demand = [this, entry] {
+                        const std::lock_guard<std::mutex> guard(mutex_);
+                        return demand_locked(*entry);
+                    };
+                    if (entry->prepare) {
+                        lease = entry->prepare(demand);
+                    }
+                    {
+                        const std::lock_guard<std::mutex> guard(mutex_);
+                        if (!demand_locked(*entry)) {
+                            throw ClosedError("unclaimed read no longer has a reader or poll demand");
+                        }
+                        entry->claimed = true;
+                    }
+                    value.emplace(entry->execute(lease));
                 } catch (...) {
                     error = std::current_exception();
                 }
+                // Gate validity checks acquire mutex_. Release the gate outside
+                // it so completion cannot invert that lock order.
+                lease.reset();
                 lock.lock();
                 if (!entry->done) {
                     try {

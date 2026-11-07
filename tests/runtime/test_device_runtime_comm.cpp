@@ -1870,3 +1870,71 @@ TEST_CASE("recovery quiet windows do not include another device route", "[comm][
     peer.join();
     REQUIRE_FALSE(error);
 }
+
+TEST_CASE("buffered response failures keep matching frames out of report decoders", "[comm][python-phase2]") {
+    const auto barrier = std::make_shared<std::promise<void>>();
+    auto processed = barrier->get_future();
+    Rig rig;
+    (void)rig.runtime->observe("angle", [](const Message &message) {
+        if (message.id == 0x28 && message.dlc == 7 && message.data[0] == 1) {
+            return linkerbot::hand::protocol::Progress::complete(static_cast<int>(message.data[1]));
+        }
+        return linkerbot::hand::protocol::Progress::unmatched();
+    });
+    (void)rig.runtime->observe("barrier", [barrier](const Message &message) {
+        if (message.id == 0x28 && message.dlc == 1 && message.data[0] == 0xFE) {
+            barrier->set_value();
+            return linkerbot::hand::protocol::Progress::complete(true);
+        }
+        return linkerbot::hand::protocol::Progress::unmatched();
+    });
+    Message baseline{};
+    baseline.id = 0x28;
+    baseline.dlc = 7;
+    baseline.data[0] = 1;
+    baseline.data[1] = 64;
+    rig.fake->inject(baseline);
+    const auto baseline_deadline = Clock::now() + 1s;
+    while (!rig.runtime->snapshot_as<int>("angle") && Clock::now() < baseline_deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    REQUIRE((test_support::require_value(rig.runtime->snapshot_as<int>("angle")) == 64));
+    auto transaction = plan();
+    transaction.response_window = 100ms;
+    transaction.defer_errors_until_send = true;
+    transaction.publish_after_send = true;
+    transaction.preserve_last_success = true;
+    transaction.consume = [](const Message &message) {
+        if (message.id != 0x28 || message.dlc == 0 || message.data[0] != 1) {
+            return linkerbot::hand::protocol::Progress::unmatched();
+        }
+        if (message.dlc != 7) {
+            throw linkerbot::hand::ProtocolError("injected malformed vector");
+        }
+        return linkerbot::hand::protocol::Progress::complete(static_cast<int>(message.data[1]));
+    };
+    rig.fake->arm_tx_gate();
+    const auto request = rig.runtime->submit(transaction, Clock::now() + 2s);
+    const bool entered = rig.fake->wait_until_tx_entered(1s);
+    Message response{};
+    response.id = 0x28;
+    response.dlc = 2;
+    response.data[0] = 1;
+    rig.fake->inject(response);
+    response.dlc = 7;
+    response.data[1] = 99;
+    rig.fake->inject(response);
+    response.dlc = 1;
+    response.data[0] = 0xFE;
+    rig.fake->inject(response);
+    const auto observed = processed.wait_for(1s);
+    const auto before = rig.runtime->snapshot_as<int>("angle");
+    const bool completed_early = request.completed();
+    rig.fake->release_tx_gate();
+    REQUIRE((entered));
+    REQUIRE((observed == std::future_status::ready));
+    REQUIRE_FALSE(completed_early);
+    REQUIRE((test_support::require_value(before) == 64));
+    REQUIRE_THROWS_AS(request.wait(), linkerbot::hand::ProtocolError);
+    REQUIRE((test_support::require_value(rig.runtime->snapshot_as<int>("angle")) == 64));
+}

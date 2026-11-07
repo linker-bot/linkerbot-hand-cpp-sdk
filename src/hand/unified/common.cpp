@@ -87,6 +87,7 @@ namespace linkerbot::hand::unified_detail {
         const auto maximum_duration =
             std::chrono::duration_cast<std::chrono::milliseconds>(HealthClock::duration::max());
         if ((config.response_timeout && *config.response_timeout > maximum_duration) ||
+            (config.runtime_behavior == RuntimeBehavior::kPython && config.identity_timeout > maximum_duration) ||
             config.recovery_timeout > maximum_duration || config.recovery_quiet > maximum_duration) {
             throw ValidationError("runtime durations must fit the monotonic clock");
         }

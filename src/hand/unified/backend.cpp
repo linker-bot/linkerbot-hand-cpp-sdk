@@ -272,7 +272,8 @@ namespace linkerbot::hand::unified_detail {
                 return coordinated_read(semantic, timeout, false);
             }
             [[nodiscard]] TelemetrySample coordinated_read(TelemetrySemantic semantic,
-                                                           std::chrono::milliseconds timeout, bool polling) {
+                                                           std::chrono::milliseconds timeout, bool polling,
+                                                           runtime::CancellationToken poll_cancel = {}) {
                 if (!capabilities_.supports(semantic)) {
                     throw UnsupportedOperationError("telemetry semantic is not supported by this device");
                 }
@@ -293,15 +294,20 @@ namespace linkerbot::hand::unified_detail {
                     const auto deadline = runtime::deadline_after(timeout);
                     const auto valid = read_generation();
                     while (true) {
-                        auto value = reads_->read(
+                        auto value = reads_->read_prepared(
                             static_cast<unsigned>(semantic), deadline,
-                            [this, semantic, valid] {
+                            [this, semantic, valid](const std::shared_ptr<void> &lane) {
                                 ReadValue result;
                                 with_windows(
-                                    [&] { result = read_direct(semantic, config_.transaction_timeout, valid); }, valid);
+                                    [&] { result = read_direct(semantic, config_.transaction_timeout, valid, lane); },
+                                    valid);
                                 return result;
                             },
-                            polling);
+                            [this, valid](const std::function<bool()> &demand) {
+                                return execution_gate_->acquire(false, runtime::Deadline::max(), {},
+                                                                [valid, demand] { return valid() && demand(); });
+                            },
+                            polling, poll_cancel);
                         auto sample = std::get<TelemetrySample>(std::move(value));
                         const bool fresh = std::visit(
                             [&](const auto &reading) {
@@ -321,14 +327,15 @@ namespace linkerbot::hand::unified_detail {
             }
 
             [[nodiscard]] TelemetrySample read_direct(TelemetrySemantic semantic, std::chrono::milliseconds timeout,
-                                                      const std::function<bool()> &valid = {}) {
+                                                      const std::function<bool()> &valid = {},
+                                                      const std::shared_ptr<void> &prepared = {}) {
                 if (!capabilities_.supports(semantic)) {
                     throw UnsupportedOperationError("telemetry semantic is not supported by this device");
                 }
                 const auto deadline = config_.runtime_behavior == RuntimeBehavior::kPython
                                           ? runtime::Deadline::max()
                                           : runtime::deadline_after(timeout);
-                auto lease = execution_gate_->acquire(false, deadline, {}, valid);
+                auto lease = prepared ? prepared : execution_gate_->acquire(false, deadline, {}, valid);
                 dispatch_guard_->wait(deadline, {}, valid);
                 if constexpr (std::is_same_v<Device, o30::O30>) {
                     if (config_.o30_layout == O30Layout::kPythonV25 && semantic != TelemetrySemantic::kForce &&
@@ -451,12 +458,17 @@ namespace linkerbot::hand::unified_detail {
             [[nodiscard]] DeviceIdentity verify_identity(HandSide side, std::chrono::milliseconds timeout) override {
                 if (reads_) {
                     const auto valid = read_generation();
-                    auto value = reads_->read(
-                        std::numeric_limits<unsigned>::max(), runtime::deadline_after(timeout), [this, side, valid] {
+                    auto value = reads_->read_prepared(
+                        std::numeric_limits<unsigned>::max(), runtime::deadline_after(timeout),
+                        [this, side, valid](const std::shared_ptr<void> &lane) {
                             ReadValue result;
-                            with_windows([&] { result = identity_direct(side, config_.identity_timeout, valid); },
-                                         valid);
+                            with_windows([&] { result = identity_direct(side, config_.identity_timeout, valid, lane); },
+                                         valid, true);
                             return result;
+                        },
+                        [this, valid](const std::function<bool()> &demand) {
+                            return execution_gate_->acquire(false, runtime::Deadline::max(), {},
+                                                            [valid, demand] { return valid() && demand(); });
                         });
                     return std::get<DeviceIdentity>(std::move(value));
                 }
@@ -464,11 +476,12 @@ namespace linkerbot::hand::unified_detail {
             }
 
             [[nodiscard]] DeviceIdentity identity_direct(HandSide side, std::chrono::milliseconds timeout,
-                                                         const std::function<bool()> &valid = {}) {
+                                                         const std::function<bool()> &valid = {},
+                                                         const std::shared_ptr<void> &prepared = {}) {
                 const auto deadline = config_.runtime_behavior == RuntimeBehavior::kPython
                                           ? runtime::Deadline::max()
                                           : runtime::deadline_after(timeout);
-                auto lease = execution_gate_->acquire(false, deadline, {}, valid);
+                auto lease = prepared ? prepared : execution_gate_->acquire(false, deadline, {}, valid);
                 dispatch_guard_->wait(deadline, {}, valid);
                 return read_identity(*device_, side, runtime::remaining(deadline));
             }
@@ -480,7 +493,7 @@ namespace linkerbot::hand::unified_detail {
             }
             DeviceIdentity initialize_identity(HandSide side, std::chrono::milliseconds timeout) override {
                 DeviceIdentity result;
-                with_windows([&] { result = identity_direct(side, timeout); });
+                with_windows([&] { result = identity_direct(side, timeout); }, {}, true);
                 return result;
             }
             void start_polling(const PollingPlan &plan) override {
@@ -490,9 +503,9 @@ namespace linkerbot::hand::unified_detail {
                         runtime::DeviceRuntime::PollTask task;
                         task.name = python_polling_domain(channel.semantic);
                         task.period = channel.interval;
-                        task.run = [this, semantic = channel.semantic](runtime::CancellationToken) {
+                        task.run = [this, semantic = channel.semantic](runtime::CancellationToken token) {
                             try {
-                                (void)coordinated_read(semantic, config_.transaction_timeout, true);
+                                (void)coordinated_read(semantic, config_.transaction_timeout, true, token);
                             } catch (const TimeoutError &) {
                                 // A poll miss or caller wait expiry does not fault
                                 // unrelated channels or cancel shared readers.
@@ -525,7 +538,7 @@ namespace linkerbot::hand::unified_detail {
                             if (channel.semantic == TelemetrySemantic::kVoltages) {
                                 task.name = "voltages";
                             }
-                            task.run = [this, semantic = channel.semantic](runtime::CancellationToken) {
+                            task.run = [this, semantic = channel.semantic](runtime::CancellationToken token) {
                                 if (semantic == TelemetrySemantic::kForce || semantic == TelemetrySemantic::kForceFns) {
                                     (void)read_telemetry(*device_, semantic, std::chrono::milliseconds{1000});
                                 } else {
@@ -610,14 +623,21 @@ namespace linkerbot::hand::unified_detail {
                            read_epoch_.load(std::memory_order_acquire) == epoch;
                 };
             }
-            void with_windows(const std::function<void()> &execute, std::function<bool()> valid = {}) {
+            void with_windows(const std::function<void()> &execute, std::function<bool()> valid = {},
+                              bool identity = false) {
                 if (config_.runtime_behavior != RuntimeBehavior::kPython) {
                     execute();
                     return;
                 }
                 RuntimeAccess::with_response_windows(
                     *device_->runtime(),
-                    [this](runtime::TransactionPlan plan) { return python_transaction(std::move(plan), config_); },
+                    [this, identity](runtime::TransactionPlan plan) {
+                        plan = python_transaction(std::move(plan), config_);
+                        if (identity && plan.consume) {
+                            plan.response_window = config_.identity_timeout;
+                        }
+                        return plan;
+                    },
                     execute,
                     runtime::Deadline{runtime::Clock::duration{execution_deadline_.load(std::memory_order_acquire)}},
                     std::move(valid));
