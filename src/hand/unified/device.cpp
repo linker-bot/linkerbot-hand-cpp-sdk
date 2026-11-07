@@ -1169,16 +1169,16 @@ namespace linkerbot::hand {
     }
 
     void HandDevice::start_polling(const PollingPlan &requested) {
+        if (requested.empty() && impl_->config_.empty_polling_plan_disables) {
+            stop_polling();
+            return;
+        }
         impl_->assert_external_lifecycle();
         impl_->ensure_ready("start_polling");
         const std::lock_guard<std::timed_mutex> lifecycle(impl_->lifecycle_mutex_);
         const auto context = impl_->capture("start_polling");
         const auto &capabilities = context.capabilities;
         auto plan = requested;
-        if (plan.empty() && impl_->config_.empty_polling_plan_disables) {
-            stop_polling();
-            return;
-        }
         if (plan.empty()) {
             plan.push_back({TelemetrySemantic::kAngles, impl_->config_.polling_interval});
         }
