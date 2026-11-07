@@ -699,14 +699,15 @@ namespace linkerbot::hand {
                 throw ClosedError("open interrupted by lifecycle shutdown");
             }
             impl_->backend_ = next;
-            ++impl_->cache_generation_;
-            impl_->cache_physical_generation_ = physical_generation;
-            impl_->cached_source_sequence_.reset();
             if (!impl_->expected_identity_) {
                 impl_->expected_identity_ = initialized.identity;
             }
             impl_->identity_ = std::move(initialized.identity);
             impl_->verified_capabilities_ = std::move(initialized.capabilities);
+            // Advance the readable generation only after initialization state is installed.
+            ++impl_->cache_generation_;
+            impl_->cache_physical_generation_ = physical_generation;
+            impl_->cached_source_sequence_.reset();
             impl_->state_.store(Impl::State::kReady, std::memory_order_release);
             impl_->open_.store(true, std::memory_order_release);
         } catch (...) {
@@ -1447,11 +1448,12 @@ namespace linkerbot::hand {
                 if (impl_->generation_ != recovery_generation) {
                     throw ClosedError("recovery generation ended before Ready");
                 }
+                impl_->identity_ = std::move(initialized.identity);
+                impl_->verified_capabilities_ = std::move(initialized.capabilities);
+                // Advance the readable generation only after initialization state is installed.
                 ++impl_->cache_generation_;
                 impl_->cache_physical_generation_ = physical_generation;
                 impl_->cached_source_sequence_.reset();
-                impl_->identity_ = std::move(initialized.identity);
-                impl_->verified_capabilities_ = std::move(initialized.capabilities);
                 impl_->state_.store(Impl::State::kReady, std::memory_order_release);
                 impl_->open_.store(true, std::memory_order_release);
                 impl_->snapshot_cv_.notify_all();
