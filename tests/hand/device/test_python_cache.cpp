@@ -13,9 +13,11 @@
 #include <linkerbot/can/message.hpp>
 #include <linkerbot/hand/api/config.hpp>
 #include <linkerbot/hand/api/device.hpp>
+#include <linkerbot/hand/api/readings.hpp>
 #include <linkerbot/hand/capabilities.hpp>
 #include <linkerbot/hand/errors.hpp>
 #include <linkerbot/hand/health.hpp>
+#include <linkerbot/transport/session.hpp>
 #include <memory>
 #include <string>
 #include <thread>
@@ -310,4 +312,75 @@ TEST_CASE("readable cache neither waits for a claimed write nor adds device I/O"
     REQUIRE(
         (test_support::require_value(observed.first.angles).raw == test_support::require_value(baseline.angles).raw));
     REQUIRE((test_support::require_value(observed.first.angles).meta.valid));
+}
+
+TEST_CASE("receiver failure retains invalid evidence without advancing repeated cache reads", "[comm][python-phase1]") {
+    validation::FakeHand device;
+    const auto before = device.hand.get_cached_snapshot();
+    device.transport->fail_reads("scripted receive failure");
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (device.hand.get_health().transport.connected() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(2ms);
+    }
+    REQUIRE_FALSE(device.hand.get_health().transport.connected());
+    const auto failed = device.hand.get_cached_snapshot();
+    const auto repeated = device.hand.get_cached_snapshot();
+    REQUIRE_FALSE(test_support::require_value(failed.angles).meta.valid);
+    REQUIRE((test_support::require_value(failed.angles).raw == test_support::require_value(before.angles).raw));
+    REQUIRE((failed.snapshot_sequence > before.snapshot_sequence));
+    REQUIRE((repeated.snapshot_sequence == failed.snapshot_sequence));
+    REQUIRE((repeated.connection_generation == before.connection_generation));
+}
+
+TEST_CASE("force invalidation preserves descriptor evidence while invalidating sample metadata",
+          "[comm][python-phase1]") {
+    HandSnapshot snapshot;
+    snapshot.connection_generation = 7;
+    auto &force = snapshot.force.emplace();
+    force.meta.valid = true;
+    ForceFieldSample field;
+    field.name = "fn";
+    field.meta.valid = true;
+    field.raw = {std::vector<double>{42}};
+    force.fields.push_back(field);
+    TactileSensorSample sensor;
+    sensor.available = true;
+    sensor.descriptor = "recorded descriptor";
+    force.sensors.push_back(sensor);
+    TactileMatrix matrix;
+    matrix.online = true;
+    matrix.raw = {{42}};
+    force.tactile.push_back(matrix);
+    unified_detail::invalidate_cached_snapshot(snapshot);
+    REQUIRE_FALSE(force.meta.valid);
+    REQUIRE_FALSE(force.fields.front().meta.valid);
+    REQUIRE((force.fields.front().meta.connection_generation == 7));
+    REQUIRE((force.fields.front().raw == field.raw));
+    REQUIRE((force.sensors.front().available));
+    REQUIRE((force.sensors.front().descriptor == sensor.descriptor));
+    REQUIRE((force.tactile.front().online == true));
+    REQUIRE((force.tactile.front().raw == matrix.raw));
+}
+
+TEST_CASE("a changed physical Session cannot revalidate the previous cache generation", "[comm][python-phase1]") {
+    auto session = linkerbot::transport::Session::create([] {
+        auto transport = std::make_unique<linkerbot::can::FakeTransport>();
+        transport->on_request(0x28, validation::l6_reply);
+        return transport;
+    });
+    HandDevice device(validation::config(), session);
+    device.open();
+    const auto before = device.get_cached_snapshot();
+    const auto previous = session->health().generation;
+    REQUIRE((session->recover(previous) > previous));
+    const auto disconnected = device.get_cached_snapshot();
+    REQUIRE_FALSE(test_support::require_value(disconnected.angles).meta.valid);
+    REQUIRE((test_support::require_value(disconnected.angles).raw == test_support::require_value(before.angles).raw));
+    REQUIRE((device.get_cached_snapshot().snapshot_sequence == disconnected.snapshot_sequence));
+    device.recover();
+    const auto recovered = device.get_cached_snapshot();
+    REQUIRE((test_support::require_value(recovered.angles).meta.valid));
+    REQUIRE((recovered.connection_generation == before.connection_generation + 1));
+    device.close();
+    session->close();
 }

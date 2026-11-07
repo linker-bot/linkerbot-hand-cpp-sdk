@@ -90,12 +90,6 @@ namespace linkerbot::hand::unified_detail {
                                        for (auto &field : sample->fields) {
                                            field.meta = SampleMeta::unavailable(generation);
                                        }
-                                       for (auto &sensor : sample->sensors) {
-                                           sensor.available = false;
-                                       }
-                                       for (auto &matrix : sample->tactile) {
-                                           matrix.online.reset();
-                                       }
                                    }
                                });
         for (auto &joint : snapshot.joints) {

@@ -612,6 +612,7 @@ namespace linkerbot::hand {
         std::atomic<State> state_{State::kClosed};
         HandSnapshot cached_snapshot_;
         uint64_t cache_generation_ = 0;
+        uint64_t cache_physical_generation_ = 0;
         uint64_t cache_revision_ = 0;
         bool cache_valid_ = false;
         std::optional<uint64_t> cached_source_sequence_;
@@ -692,12 +693,14 @@ namespace linkerbot::hand {
             next = impl_->create_backend();
             auto initialized = unified_detail::initialize_connection(
                 *next, impl_->config_, declared_capabilities(impl_->config_), expected ? &*expected : nullptr);
+            const auto physical_generation = next->health().session.generation;
             const std::lock_guard<std::mutex> lock(impl_->mutex_);
             if (impl_->generation_ != opening_generation) {
                 throw ClosedError("open interrupted by lifecycle shutdown");
             }
             impl_->backend_ = next;
             ++impl_->cache_generation_;
+            impl_->cache_physical_generation_ = physical_generation;
             impl_->cached_source_sequence_.reset();
             if (!impl_->expected_identity_) {
                 impl_->expected_identity_ = initialized.identity;
@@ -1254,6 +1257,13 @@ namespace linkerbot::hand {
         complete_meta(result.stall_detection_times, TelemetrySemantic::kStallDetectionTimes);
         complete_meta(result.stall_thresholds, TelemetrySemantic::kStallThresholds);
         complete_meta(result.stall_hold_currents, TelemetrySemantic::kStallHoldCurrents);
+        if (!health.connected() || !health.session.open || !health.transport.connected() ||
+            health.session.generation != cache_physical_generation_) {
+            // A failed native receiver may already have cleared its projections.
+            // Preserve the last retained evidence and invalidate it only once.
+            invalidate_cache_locked();
+            return result;
+        }
         auto retained = result;
         unified_detail::shape_cached_samples(retained, capabilities);
         unified_detail::set_cached_generation(retained, cache_generation_);
@@ -1264,9 +1274,6 @@ namespace linkerbot::hand {
         cached_snapshot_ = std::move(retained);
         cached_source_sequence_ = result.snapshot_sequence;
         cache_valid_ = true;
-        if (!health.connected()) {
-            invalidate_cache_locked();
-        }
         return result;
     }
 
@@ -1435,11 +1442,13 @@ namespace linkerbot::hand {
                 if (restore) {
                     selected.start_polling(*restore);
                 }
+                const auto physical_generation = selected.health().session.generation;
                 const std::lock_guard<std::mutex> lock(impl_->mutex_);
                 if (impl_->generation_ != recovery_generation) {
                     throw ClosedError("recovery generation ended before Ready");
                 }
                 ++impl_->cache_generation_;
+                impl_->cache_physical_generation_ = physical_generation;
                 impl_->cached_source_sequence_.reset();
                 impl_->identity_ = std::move(initialized.identity);
                 impl_->verified_capabilities_ = std::move(initialized.capabilities);
