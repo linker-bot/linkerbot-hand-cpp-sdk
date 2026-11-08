@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <linkerbot/hand/runtime/device_runtime.hpp>
 #include <map>
 
@@ -8,6 +9,22 @@ namespace linkerbot::hand::unified_detail {
     // making their entire composite read share the unified execution arbiter.
     class RuntimeAccess {
     public:
+        class InboxScope {
+        public:
+            explicit InboxScope(size_t capacity);
+            ~InboxScope();
+            InboxScope(const InboxScope &) = delete;
+            InboxScope &operator=(const InboxScope &) = delete;
+
+        private:
+            std::optional<size_t> previous_;
+        };
+        static void initialized_health(runtime::DeviceRuntime &);
+        static size_t inbox_capacity(const runtime::DeviceRuntime &);
+        using ErrorCapture = std::shared_ptr<std::atomic<uint64_t>>;
+        static uint64_t error_revision(const runtime::DeviceRuntime &);
+        static void promote_error(runtime::DeviceRuntime &, uint64_t revision, const HandError &error,
+                                  std::optional<uint64_t> unrecorded_revision = {});
         using PublicationHandler = std::function<void(const std::string &, const runtime::Sample &)>;
         // SDK-internal sink; runs under the runtime lock and must not reenter it.
         static void set_publication_handler(runtime::DeviceRuntime &, PublicationHandler);
@@ -22,7 +39,7 @@ namespace linkerbot::hand::unified_detail {
         static void with_response_windows(runtime::DeviceRuntime &runtime, PlanTransform transform,
                                           const std::function<void()> &execute,
                                           runtime::Deadline execution_deadline = runtime::Deadline::max(),
-                                          std::function<bool()> generation_valid = {});
+                                          std::function<bool()> generation_valid = {}, ErrorCapture error_capture = {});
         using SendObserver = std::function<void(const transport::SendResult &, bool)>;
         using Submission = std::function<transport::SendReceipt()>;
         using AdmitSend = std::function<transport::SendReceipt(const Submission &, bool)>;

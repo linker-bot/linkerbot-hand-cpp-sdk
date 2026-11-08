@@ -4044,6 +4044,7 @@ TEST_CASE("Python published metadata is stable across Classic and L30 models", "
         CAPTURE(model);
         auto config = config_for(model);
         config.runtime_behavior = RuntimeBehavior::kPython;
+        config.route_queue_capacity = 32;
         config.response_timeout = 200ms;
         std::shared_ptr<o30_comm::HopEndpoint> hop;
         HandDevice device(config, [&] {
@@ -4066,6 +4067,10 @@ TEST_CASE("Python published metadata is stable across Classic and L30 models", "
         device.open();
         const auto reopened = device.get_cached_snapshot();
         REQUIRE((reopened.connection_generation == 2));
+        REQUIRE((device.get_health().connection_generation == reopened.connection_generation));
+        for (const auto &channel : device.get_health().channels) {
+            REQUIRE((channel.data_age.generation == 2));
+        }
         REQUIRE((test_support::require_value(reopened.angles).meta.sequence == 1));
         REQUIRE((test_support::require_value(reopened.angles).meta.connection_generation == 2));
         REQUIRE((test_support::require_value(reopened.device_info).meta.connection_generation == 2));
@@ -4149,5 +4154,35 @@ TEST_CASE("Python optional polling degradation preserves other poll channels and
     device.recover_for(2s);
     REQUIRE((device.get_capabilities().supports(TelemetrySemantic::kCurrents)));
     REQUIRE((device.get_currents(1s).meta.valid));
+    device.close();
+}
+
+TEST_CASE("Python O30 no-sensor downgrade is recorded after successful metadata queries", "[comm][python-phase4]") {
+    using namespace std::chrono_literals;
+    auto config = config_for(Model::kO30);
+    config.runtime_behavior = RuntimeBehavior::kPython;
+    config.o30_layout = O30Layout::kPythonV25;
+    config.side = HandSide::kLeft;
+    config.identity_timeout = 300ms;
+    config.response_timeout = 300ms;
+    std::shared_ptr<o30_comm::HopEndpoint> hop;
+    HandDevice device(config, [&] {
+        auto t = std::make_unique<FakeTransport>();
+        hop = std::make_shared<o30_comm::HopEndpoint>();
+        hop->request_id = 2;
+        install_fake_device(Model::kO30, t.get(), hop);
+        hop->put_ascii(0x41, 0x61, 8, "0.0.4");
+        std::vector<uint8_t> metadata(0x73, 0);
+        const std::string type = "NO_SENSOR";
+        std::copy(type.begin(), type.end(), metadata.begin());
+        hop->put(o30::protocol::kMiSensorInfo, metadata);
+        return t;
+    });
+    device.open();
+    REQUIRE_THROWS_AS(device.get_force(3s), UnsupportedFirmwareError);
+    const auto health = device.get_health();
+    REQUIRE((test_support::require_value(health.recent_error).code == ErrorCode::kUnsupportedFirmware));
+    REQUIRE((health.consecutive_errors == 1));
+    REQUIRE_FALSE(device.get_capabilities().supports(TelemetrySemantic::kForce));
     device.close();
 }

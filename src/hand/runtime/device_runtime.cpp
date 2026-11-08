@@ -101,6 +101,7 @@ namespace linkerbot::hand::runtime {
             const std::map<std::string, Sample> *samples;
         };
         thread_local std::optional<SnapshotView> current_snapshot_view;
+        thread_local std::optional<size_t> construction_inbox_capacity;
 
         std::string canonical_channel(std::string_view domain) {
             if (domain == "angle" || domain == "angles") {
@@ -346,6 +347,7 @@ namespace linkerbot::hand::runtime {
             unified_detail::RuntimeAccess::PlanTransform transform;
             Deadline deadline;
             std::function<bool()> generation_valid;
+            unified_detail::RuntimeAccess::ErrorCapture error_capture;
         };
         thread_local std::map<const DeviceRuntime *, ResponsePolicy> response_policies;
     }
@@ -378,6 +380,7 @@ namespace linkerbot::hand::runtime {
         bool return_after_send = false;
         bool scoped_command = false;
         bool scoped_response_policy = false;
+        unified_detail::RuntimeAccess::ErrorCapture error_capture;
         bool response_deadline_armed = false;
         bool response_window_expiry = false;
         std::optional<Deadline> receipt_response_deadline() const {
@@ -565,6 +568,8 @@ namespace linkerbot::hand::runtime {
         std::map<std::string, CommandFamilyState> command_family_states;
         std::map<std::string, uint64_t> domain_sequences;
         std::deque<HealthDuration> transaction_latencies;
+        uint64_t error_revision = 0;
+        uint64_t last_success_error_revision = 0;
         std::optional<ErrorInfo> recent_error;
         uint64_t consecutive_errors = 0;
         uint64_t reconnect_count = 0;
@@ -761,6 +766,7 @@ namespace linkerbot::hand::runtime {
             } catch (const HandError &hand_error) {
                 health.last_error = hand_error.what();
                 recent_error = error_info(hand_error);
+                ++error_revision;
                 ++consecutive_errors;
             }
             return classified;
@@ -854,6 +860,9 @@ namespace linkerbot::hand::runtime {
             }
             if (error) {
                 error = record_error_locked(std::move(error), state->context, ErrorCode::kProtocol);
+                if (state->error_capture) {
+                    state->error_capture->store(error_revision, std::memory_order_release);
+                }
             }
             sync_command_receipt_locked(*state);
             if (isolate) {
@@ -958,6 +967,9 @@ namespace linkerbot::hand::runtime {
                 consecutive_errors = 0;
                 if (completed_at) {
                     last_successful_transaction = completed_at;
+                    if (state->scoped_response_policy) {
+                        last_success_error_revision = error_revision;
+                    }
                 }
                 if (completed_latency) {
                     transaction_latencies.push_back(*completed_latency);
@@ -1365,6 +1377,9 @@ namespace linkerbot::hand::runtime {
     std::shared_ptr<DeviceRuntime> DeviceRuntime::acquire(std::shared_ptr<transport::Session> session,
                                                           std::string identity, std::vector<transport::RouteKey> routes,
                                                           size_t capacity) {
+        if (construction_inbox_capacity) {
+            capacity = ::linkerbot::hand::detail::checked_value(construction_inbox_capacity, "missing inbox scope");
+        }
         if (!session || identity.empty()) {
             throw ValidationError("runtime requires a session and identity");
         }
@@ -1454,6 +1469,9 @@ namespace linkerbot::hand::runtime {
         state->external = cancellation;
         state->generation_valid = std::move(generation_valid);
         state->scoped_response_policy = response_policies.count(this) != 0;
+        if (const auto policy = response_policies.find(this); policy != response_policies.end()) {
+            state->error_capture = policy->second.error_capture;
+        }
         state->owner = std::this_thread::get_id();
         auto &p = *impl_;
         {
@@ -2774,19 +2792,18 @@ void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(
     restore();
 }
 
-void linkerbot::hand::unified_detail::RuntimeAccess::with_response_windows(runtime::DeviceRuntime &runtime,
-                                                                           PlanTransform transform,
-                                                                           const std::function<void()> &execute,
-                                                                           runtime::Deadline execution_deadline,
-                                                                           std::function<bool()> generation_valid) {
+void linkerbot::hand::unified_detail::RuntimeAccess::with_response_windows(
+    runtime::DeviceRuntime &runtime, PlanTransform transform, const std::function<void()> &execute,
+    runtime::Deadline execution_deadline, std::function<bool()> generation_valid, ErrorCapture error_capture) {
     {
         const std::lock_guard<std::mutex> lock(runtime.impl_->mutex);
         runtime.impl_->python_endpoint_policy = true;
     }
     auto previous = runtime::response_policies.extract(&runtime);
     try {
-        runtime::response_policies.emplace(
-            &runtime, runtime::ResponsePolicy{std::move(transform), execution_deadline, std::move(generation_valid)});
+        runtime::response_policies.emplace(&runtime, runtime::ResponsePolicy{std::move(transform), execution_deadline,
+                                                                             std::move(generation_valid),
+                                                                             std::move(error_capture)});
     } catch (...) {
         if (!previous.empty()) {
             runtime::response_policies.insert(std::move(previous));
@@ -2911,4 +2928,53 @@ void linkerbot::hand::unified_detail::RuntimeAccess::wait_command_feedback(
                std::none_of(p.pending.begin(), p.pending.end(),
                             [](const auto &request) { return request->plan.optional_response_window.has_value(); });
     });
+}
+
+linkerbot::hand::unified_detail::RuntimeAccess::InboxScope::InboxScope(size_t capacity)
+    : previous_(runtime::construction_inbox_capacity) {
+    if (capacity == 0) {
+        throw ValidationError("inbox capacity must be positive");
+    }
+    runtime::construction_inbox_capacity = capacity;
+}
+linkerbot::hand::unified_detail::RuntimeAccess::InboxScope::~InboxScope() {
+    runtime::construction_inbox_capacity = previous_;
+}
+size_t linkerbot::hand::unified_detail::RuntimeAccess::inbox_capacity(const runtime::DeviceRuntime &device) {
+    const std::lock_guard<std::mutex> lock(device.impl_->mutex);
+    return device.impl_->inbox_capacity;
+}
+uint64_t linkerbot::hand::unified_detail::RuntimeAccess::error_revision(const runtime::DeviceRuntime &device) {
+    const std::lock_guard<std::mutex> lock(device.impl_->mutex);
+    return device.impl_->error_revision;
+}
+void linkerbot::hand::unified_detail::RuntimeAccess::promote_error(runtime::DeviceRuntime &device, uint64_t revision,
+                                                                   const HandError &error,
+                                                                   std::optional<uint64_t> unrecorded_revision) {
+    const std::lock_guard<std::mutex> lock(device.impl_->mutex);
+    // A later observer/transport error must not be replaced by an older query's downgrade.
+    if (revision != 0 && revision == device.impl_->error_revision) {
+        auto info = runtime::error_info(error);
+        device.impl_->recent_error = std::move(info);
+        device.impl_->health.last_error = error.what();
+    } else if (revision == 0 && unrecorded_revision &&
+               unrecorded_revision.value_or(0) == device.impl_->error_revision) {
+        // Some protocol adapters reject a decoded value after a successful native
+        // read. That logical failure has not yet been counted by the runtime.
+        (void)device.impl_->record_error_locked(
+            std::make_exception_ptr(UnsupportedFirmwareError(error.what(), error.context(), error.cause())),
+            device.impl_->error_context("runtime.read", error.context().channel));
+    }
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::initialized_health(runtime::DeviceRuntime &device) {
+    const std::lock_guard<std::mutex> lock(device.impl_->mutex);
+    if (device.impl_->python_endpoint_policy &&
+        device.impl_->last_success_error_revision == device.impl_->error_revision) {
+        device.impl_->recent_error.reset();
+        device.impl_->health.last_error.clear();
+        device.impl_->consecutive_errors = 0;
+        ++device.impl_->error_revision;
+        device.impl_->last_success_error_revision = device.impl_->error_revision;
+    }
 }

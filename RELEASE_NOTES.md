@@ -1,5 +1,16 @@
 # Release notes
 
+## 0.3.8
+
+- Bound Python-policy `stop_polling()` by `shutdown_timeout`. Remove unclaimed poll demand, release poll observers and wait for already-claimed polling transactions to finish. Keep coalesced active readers and other devices running. A stop timeout leaves the device open and its polling intent disabled; recovery does not restore the stopped plan.
+- Project Python-policy health and channel-age generations onto the facade's successful open/recovery generation, matching retained snapshots across close, reopen and recovery. Physical Session generations remain separate. Native health projection is unchanged.
+- Record an optional query's final `UnsupportedFirmwareError` in health without counting its underlying failure twice. Count post-decode unsupported results once when native metadata reads succeeded. Associate the update with that native failure's revision so a later error cannot be overwritten. Successful initialization clears prior errors only when no newer native error followed its last successful transaction.
+- Add optional `route_queue_capacity` to device and discovery runtime configuration for the Python policy. The unset Python value selects 256 routed receive frames per device; a positive override reaches the existing Runtime inbox and survives recovery. Native defaults remain 512, and Native configurations reject the new Python-only override. Invalid capacity is rejected before transport creation. No receive layer or physical send queue is added.
+
+Existing C++ method signatures and Native defaults remain available. Public configuration additions require rebuilding the SDK and downstream consumers with matching headers and libraries; binary compatibility with earlier headers is not claimed. The minimum and paired transport remain v0.3.4 (`0e190032d65ed0b315337b45b3779cf4f650ed68`).
+
+Validation uses offline FakeTransport lifecycle, coalesced-reader, shared-Session isolation, error-ordering and inbox-overflow regressions, source/prebuilt/installed consumers, sanitizers, complete static analysis and the twelve-target release matrix. These checks do not add physical-device acceptance. Deployed adapters/drivers, firmware, physical timestamps, mixed CAN/FD topology and multi-device duration tests require separate hardware validation. O20, Python bindings and hand/arm integration are outside this patch; tactile-stage angle scheduling, extended identity parity and optional automatic reconnect remain separate work.
+
 ## 0.3.7
 
 - Extend the explicit `RuntimeBehavior::kPython` policy with publication-based channel sequences and coherent retained snapshots. Cache readers do not advance acquisition counters. Identity reads carry independent sample metadata; closed Python-policy caches retain identity evidence with invalid metadata.

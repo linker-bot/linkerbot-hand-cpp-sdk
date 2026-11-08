@@ -102,6 +102,10 @@ namespace linkerbot::hand::unified_detail {
         if (config.response_timeout && config.response_timeout->count() <= 0) {
             throw ValidationError("response_timeout must be positive when specified");
         }
+        if (config.route_queue_capacity &&
+            (config.runtime_behavior != RuntimeBehavior::kPython || config.route_queue_capacity.value_or(0) == 0)) {
+            throw ValidationError("route_queue_capacity requires Python policy and a positive value");
+        }
         if (config.read_waiter_capacity == 0) {
             throw ValidationError("read_waiter_capacity must be positive");
         }

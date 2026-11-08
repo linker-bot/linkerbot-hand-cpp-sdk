@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.8
+
+- Correct bounded poll shutdown, logical health generations and final optional-query errors in the explicit Python policy.
+- Add Python-only routed receive capacity configuration, discovery propagation, overflow and installed-consumer regressions. Native defaults and transport v0.3.4 minimum remain unchanged.
+- Rebuild SDK and consumers. No new hardware acceptance is claimed; see [release notes](RELEASE_NOTES.md).
+
 ## 0.3.7
 
 - Add publication-based channel sequences, identity sample metadata, filtered retained-cache waits, firmware-optional query degradation and unified angle feedback policies to the explicit Python runtime policy.

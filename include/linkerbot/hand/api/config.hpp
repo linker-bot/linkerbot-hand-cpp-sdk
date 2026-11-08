@@ -48,6 +48,9 @@ namespace linkerbot::hand {
         std::optional<std::chrono::milliseconds> response_timeout;
         std::chrono::milliseconds recovery_timeout{5000};
         std::chrono::milliseconds recovery_quiet{200};
+        // Python policy only: nullopt selects 256 routed receive frames per device.
+        // Native constructors retain their existing 512-frame default.
+        std::optional<size_t> route_queue_capacity;
     };
 
     // Fully resolved input consumed by HandDevice. Direct construction fills
@@ -114,5 +117,8 @@ namespace linkerbot::hand {
         std::optional<std::chrono::milliseconds> response_timeout;
         std::chrono::milliseconds recovery_timeout{5000};
         std::chrono::milliseconds recovery_quiet{200};
+        // Python policy only: nullopt selects 256 routed receive frames per device.
+        // Native constructors retain their existing 512-frame default.
+        std::optional<size_t> route_queue_capacity;
     };
 } // namespace linkerbot::hand

@@ -461,6 +461,20 @@ namespace linkerbot::hand {
             }
         }
 
+        void project_public_health(HandHealth &health, State state) const {
+            project_health(health, state);
+            if (config_.runtime_behavior == RuntimeBehavior::kPython) {
+                health.connection_generation = cache_generation_;
+                for (auto &channel : health.channels) {
+                    channel.data_age.generation = cache_generation_;
+                }
+                if (health.recent_error) {
+                    ::linkerbot::hand::detail::checked_value(health.recent_error, "missing recent error")
+                        .context.generation = cache_generation_;
+                }
+            }
+        }
+
         [[nodiscard]] CommandHandle submit_raw(CommandSemantic semantic, const std::vector<double> &values,
                                                const char *operation,
                                                std::optional<std::chrono::milliseconds> timeout = {}) {
@@ -867,7 +881,7 @@ namespace linkerbot::hand {
             const auto state = impl_->state_.load(std::memory_order_acquire);
             if (!impl_->backend_ || (state != Impl::State::kReady && state != Impl::State::kFaulted)) {
                 HandHealth health;
-                Impl::project_health(health, state);
+                impl_->project_public_health(health, state);
                 health.command_families = impl_->scheduler_->metrics();
                 return health;
             }
@@ -879,9 +893,13 @@ namespace linkerbot::hand {
         if (generation != impl_->generation_ || selected != impl_->backend_) {
             health = HandHealth{};
         }
-        Impl::project_health(health, impl_->state_.load(std::memory_order_acquire));
+        impl_->project_public_health(health, impl_->state_.load(std::memory_order_acquire));
         if (impl_->state_.load(std::memory_order_acquire) == Impl::State::kFaulted && impl_->refresh_error_) {
             health.recent_error = impl_->refresh_error_;
+            if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython && health.recent_error) {
+                ::linkerbot::hand::detail::checked_value(health.recent_error, "missing refresh error")
+                    .context.generation = impl_->cache_generation_;
+            }
         }
         // Unified setter counters own logical acceptance/completion. Native
         // transaction/session counters remain available without being added a
@@ -1547,6 +1565,11 @@ namespace linkerbot::hand {
         const std::lock_guard<std::timed_mutex> lifecycle(impl_->lifecycle_mutex_);
         const auto context = impl_->capture("stop_polling");
         auto lease = impl_->begin_io(context, "stop_polling");
+        if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython) {
+            const std::lock_guard<std::mutex> lock(impl_->mutex_);
+            impl_->check_context(context, "stop_polling");
+            impl_->polling_plan_.reset();
+        }
         context.backend->stop_polling();
         const std::lock_guard<std::mutex> lock(impl_->mutex_);
         impl_->check_context(context, "stop_polling");

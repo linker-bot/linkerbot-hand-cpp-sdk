@@ -691,3 +691,19 @@ TEST_CASE("discovery connection keys and descriptors include backend timing iden
     REQUIRE(report.failures().size() == 1);
     CHECK(report.failures()[0].code() == "channel_descriptor_conflict");
 }
+
+TEST_CASE("discovery preserves Python routed receive capacity without opening a device", "[discovery][python-phase4]") {
+    int created = 0;
+    const auto candidate = verified_candidate("python-inbox", &created);
+    HandRuntimeConfig runtime;
+    runtime.runtime_behavior = RuntimeBehavior::kPython;
+    runtime.route_queue_capacity = 17;
+    const auto config = candidate.make_config(runtime);
+    REQUIRE((config.route_queue_capacity == 17));
+    auto hand = candidate.create_hand_device(runtime);
+    REQUIRE_FALSE(hand->is_open());
+    REQUIRE((created == 0));
+    runtime.route_queue_capacity = 0;
+    REQUIRE_THROWS_AS(candidate.make_config(runtime), ValidationError);
+    REQUIRE((created == 0));
+}

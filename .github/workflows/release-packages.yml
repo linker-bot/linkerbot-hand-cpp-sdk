@@ -26,7 +26,7 @@ name: Release packages
       expected_version:
         description: 'Hand SDK version (transport may use a compatible newer patch)'
         required: true
-        default: '0.3.7'
+        default: '0.3.8'
 
 permissions:
   contents: read

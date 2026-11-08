@@ -241,7 +241,11 @@ namespace linkerbot::hand::unified_detail {
             ((error.code() == ErrorCode::kTimeout || error.code() == ErrorCode::kProtocol) &&
              ++failures_[semantic] >= 3)) {
             disable_locked(semantic);
-            throw UnsupportedFirmwareError("firmware does not support this optional query", error.context(),
+            auto context = error.context();
+            if (context.channel.empty()) {
+                context.channel = domain(semantic);
+            }
+            throw UnsupportedFirmwareError("firmware does not support this optional query", std::move(context),
                                            std::current_exception());
         }
     }

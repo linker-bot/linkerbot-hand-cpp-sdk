@@ -62,6 +62,7 @@ namespace {
         config.runtime_behavior = linkerbot::hand::RuntimeBehavior::kPython;
         config.command_timeout = 5ms;
         config.response_timeout = 50ms;
+        config.route_queue_capacity = 17;
         validation::FakeHand device(config);
         auto claimed = device.block();
         validation::require(!claimed.wait_for(20ms), "profile command expired during a claimed send");
@@ -70,6 +71,8 @@ namespace {
         device.hand.recover_for(2s);
         validation::require(device.hand.is_open(), "profile recovery failed in installed consumer");
         const auto before = device.hand.get_cached_snapshot();
+        validation::require(device.hand.get_health().connection_generation == before.connection_generation,
+                            "installed Python health generation differs from cache");
         const auto refreshed = device.hand.refresh_device_info(1s);
         validation::require(refreshed.meta.valid && refreshed.meta.sequence > 0, "installed identity metadata missing");
         const auto changed = device.hand.wait_for_cached_snapshot(before, 100ms, false);

@@ -58,6 +58,9 @@ namespace linkerbot::hand::unified_detail {
             if (!polling && waiters_ == capacity_) {
                 throw QueueFullError("active read waiter capacity is full");
             }
+            if (polling && (poll_cancel.cancelled() || (poll_demand && !poll_demand()))) {
+                throw ClosedError("poll demand ended before admission");
+            }
             auto found = entries_.find(key);
             std::shared_ptr<Entry> entry;
             if (found == entries_.end()) {
@@ -90,9 +93,10 @@ namespace linkerbot::hand::unified_detail {
             changed_.notify_all();
             bool completed = true;
             if (deadline == Clock::time_point::max()) {
-                changed_.wait(lock, [&] { return entry->done; });
+                changed_.wait(lock, [&] { return entry->done || (polling && !entry->requested_by_poll); });
             } else {
-                completed = changed_.wait_until(lock, deadline, [&] { return entry->done; });
+                completed = changed_.wait_until(lock, deadline,
+                                                [&] { return entry->done || (polling && !entry->requested_by_poll); });
             }
             if (!polling) {
                 if (generation == generation_) {
@@ -110,6 +114,9 @@ namespace linkerbot::hand::unified_detail {
                         break;
                     }
                 }
+            }
+            if (polling && !entry->done && !entry->requested_by_poll) {
+                throw ClosedError("poll demand stopped");
             }
             if (!completed || entry->completed_at >= deadline) {
                 throw TimeoutError("active read did not complete before its deadline");
@@ -139,6 +146,23 @@ namespace linkerbot::hand::unified_detail {
             entries_.clear();
             queue_.clear();
             changed_.notify_all();
+        }
+        // Stop poll observers without cancelling shared transactions or active readers.
+        void cancel_polls() {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            for (auto &[key, entry] : entries_) {
+                (void)key;
+                entry->requested_by_poll = false;
+            }
+            changed_.notify_all();
+        }
+        bool wait_polls_idle(Clock::time_point deadline) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            return changed_.wait_until(lock, deadline, [&] { return !active_poll_; });
+        }
+        size_t waiter_count() {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            return waiters_;
         }
         void drain() {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -236,6 +260,8 @@ namespace linkerbot::hand::unified_detail {
                         if (!demand_locked(*entry)) {
                             throw ClosedError("unclaimed read no longer has a reader or poll demand");
                         }
+                        active_poll_ = entry->requested_by_poll && !entry->poll_cancel.cancelled() &&
+                                       (!entry->poll_demand || entry->poll_demand());
                         entry->claimed = true;
                     }
                     value.emplace(entry->execute(lease));
@@ -260,6 +286,7 @@ namespace linkerbot::hand::unified_detail {
                     entries_.erase(it);
                 }
                 active_ = false;
+                active_poll_ = false;
                 changed_.notify_all();
             }
         }
@@ -273,6 +300,7 @@ namespace linkerbot::hand::unified_detail {
         uint64_t generation_ = 0;
         bool accepting_ = true;
         bool active_ = false;
+        bool active_poll_ = false;
         bool stopping_ = false;
         std::thread worker_;
     };

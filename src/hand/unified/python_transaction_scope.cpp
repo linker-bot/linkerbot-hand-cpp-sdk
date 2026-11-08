@@ -4,7 +4,8 @@
 namespace linkerbot::hand::unified_detail {
     void execute_python_transactions(runtime::DeviceRuntime &device, const HandDeviceConfig &config,
                                      const std::function<void()> &execute, runtime::Deadline deadline,
-                                     const std::function<bool()> &valid, bool identity) {
+                                     const std::function<bool()> &valid, bool identity,
+                                     RuntimeAccess::ErrorCapture error_capture) {
         RuntimeAccess::with_response_windows(
             device,
             [&config, identity](runtime::TransactionPlan plan) {
@@ -14,6 +15,6 @@ namespace linkerbot::hand::unified_detail {
                 }
                 return plan;
             },
-            execute, deadline, valid);
+            execute, deadline, valid, std::move(error_capture));
     }
 }

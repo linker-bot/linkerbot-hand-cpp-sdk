@@ -351,7 +351,11 @@ namespace linkerbot::hand::unified_detail {
                             static_cast<unsigned>(semantic), deadline,
                             [this, semantic, valid, polling](const std::shared_ptr<void> &lane) {
                                 ReadValue result;
-                                with_windows([&] { result = python_read(semantic, polling, valid, lane); }, valid);
+                                auto capture = std::make_shared<std::atomic<uint64_t>>(0);
+                                const auto before = RuntimeAccess::error_revision(*device_->runtime());
+                                with_windows(
+                                    [&] { result = python_read(semantic, polling, valid, lane, capture, before); },
+                                    valid, false, capture);
                                 return result;
                             },
                             [this, valid](const std::function<bool()> &demand) {
@@ -492,6 +496,7 @@ namespace linkerbot::hand::unified_detail {
             }
             void finish_initialization() override {
                 if (python_) {
+                    RuntimeAccess::initialized_health(*device_->runtime());
                     python_->initialized();
                 }
             }
@@ -703,7 +708,16 @@ namespace linkerbot::hand::unified_detail {
                 if (python_) {
                     python_->stop_polling();
                 }
-                device_->stop_polling();
+                if (reads_) {
+                    const auto deadline = runtime::deadline_after(config_.shutdown_timeout);
+                    reads_->cancel_polls();
+                    device_->stop_polling();
+                    if (!reads_->wait_polls_idle(deadline)) {
+                        throw TimeoutError("polling transaction did not stop before shutdown deadline");
+                    }
+                } else {
+                    device_->stop_polling();
+                }
             }
             void wait_quiet(std::chrono::milliseconds quiet, runtime::Deadline deadline,
                             const std::function<bool()> &cancelled) override {
@@ -767,7 +781,8 @@ namespace linkerbot::hand::unified_detail {
 
         private:
             TelemetrySample python_read(TelemetrySemantic semantic, bool polling, const std::function<bool()> &valid,
-                                        const std::shared_ptr<void> &lane) {
+                                        const std::shared_ptr<void> &lane, const RuntimeAccess::ErrorCapture &capture,
+                                        uint64_t before) {
                 if (python_->disabled(semantic)) {
                     throw UnsupportedFirmwareError("optional telemetry is disabled for this generation");
                 }
@@ -800,8 +815,14 @@ namespace linkerbot::hand::unified_detail {
                     python_->read_succeeded(semantic, polling);
                     return result;
                 } catch (const HandError &error) {
-                    python_->read_failed(semantic, device_->runtime()->runtime_health().sent_frames > sent, error,
-                                         polling);
+                    try {
+                        python_->read_failed(semantic, device_->runtime()->runtime_health().sent_frames > sent, error,
+                                             polling);
+                    } catch (const UnsupportedFirmwareError &downgraded) {
+                        RuntimeAccess::promote_error(*device_->runtime(), capture->load(std::memory_order_acquire),
+                                                     downgraded, before);
+                        throw;
+                    }
                     throw;
                 }
             }
@@ -814,7 +835,7 @@ namespace linkerbot::hand::unified_detail {
                 };
             }
             void with_windows(const std::function<void()> &execute, const std::function<bool()> &valid = {},
-                              bool identity = false) {
+                              bool identity = false, RuntimeAccess::ErrorCapture error_capture = {}) {
                 if (config_.runtime_behavior != RuntimeBehavior::kPython) {
                     execute();
                     return;
@@ -824,7 +845,7 @@ namespace linkerbot::hand::unified_detail {
                 execute_python_transactions(
                     *device_->runtime(), config_, execute,
                     runtime::Deadline{runtime::Clock::duration{execution_deadline_.load(std::memory_order_acquire)}},
-                    valid, identity);
+                    valid, identity, std::move(error_capture));
             }
             HandDeviceConfig config_;
             DeviceCapabilities capabilities_;
@@ -882,6 +903,10 @@ namespace linkerbot::hand::unified_detail {
 #endif
         if (session && config.runtime_behavior == RuntimeBehavior::kPython) {
             RuntimeAccess::retire_closed_profiles(session);
+        }
+        std::optional<RuntimeAccess::InboxScope> inbox_scope;
+        if (config.runtime_behavior == RuntimeBehavior::kPython) {
+            inbox_scope.emplace(config.route_queue_capacity.value_or(256));
         }
         const bool injected = static_cast<bool>(session);
         switch (config.model) {

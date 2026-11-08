@@ -2129,3 +2129,48 @@ TEST_CASE("late physical completion cannot publish profile success before its se
     REQUIRE((observed.load()));
     REQUIRE((rig.session->health().tx_frames == 1));
 }
+
+TEST_CASE("Python construction capacity bounds the real receive inbox", "[comm][python-phase4]") {
+    ReportProbe probe;
+    auto transport = std::make_unique<FakeTransport>();
+    auto *fake = transport.get();
+    auto session = Session::own(std::move(transport));
+    std::shared_ptr<DeviceRuntime> core;
+    {
+        linkerbot::hand::unified_detail::RuntimeAccess::InboxScope scope(1);
+        core = DeviceRuntime::acquire(session, "reports", {{0x28, false}});
+    }
+    REQUIRE((linkerbot::hand::unified_detail::RuntimeAccess::inbox_capacity(*core) == 1));
+    core->observe_factory("reports", probe.factory(true));
+    fake->inject(fragment({1, 9}));
+    REQUIRE(probe.wait(1));
+    fake->inject(fragment({0x7f}));
+    bool entered;
+    {
+        std::unique_lock<std::mutex> lock(probe.mutex);
+        entered = probe.cv.wait_for(lock, 1s, [&] { return probe.blocked; });
+    }
+    // Always release the decoder before assertions/unwinding.
+    fake->inject(fragment({2, 7}));
+    fake->inject(fragment({2, 8}));
+    const auto limit = Clock::now() + 1s;
+    while (!session->health().overflows && Clock::now() < limit) {
+        std::this_thread::yield();
+    }
+    const auto overflow = session->health().overflows;
+    probe.unblock();
+    REQUIRE(entered);
+    REQUIRE(overflow > 0);
+    REQUIRE(probe.wait(2, 2));
+    (void)core->runtime_health(); // overflow reset and queued-fragment drain have completed
+    fake->inject(fragment({2, 7}));
+    REQUIRE(probe.wait(3, 2));
+    REQUIRE_FALSE(core->snapshot_as<int>("reports").has_value());
+    fake->inject(fragment({1, 3}));
+    REQUIRE(probe.wait(4, 2));
+    fake->inject(fragment({2, 4}));
+    REQUIRE(probe.wait(5, 2));
+    REQUIRE(core->snapshot_as<int>("reports") == 0x304);
+    core->close();
+    session->close();
+}

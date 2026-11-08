@@ -2,6 +2,7 @@
 #include "classic_response.hpp"
 #include "python_l30.hpp"
 #include "python_tactile.hpp"
+#include "runtime_access.hpp"
 #include <algorithm>
 #include <array>
 #include <linkerbot/hand/api/config.hpp>
@@ -10,7 +11,8 @@
 namespace linkerbot::hand::unified_detail {
     void execute_python_transactions(runtime::DeviceRuntime &device, const HandDeviceConfig &config,
                                      const std::function<void()> &execute, runtime::Deadline deadline,
-                                     const std::function<bool()> &valid, bool identity);
+                                     const std::function<bool()> &valid, bool identity,
+                                     RuntimeAccess::ErrorCapture error_capture = {});
 
     inline const char *python_polling_domain(TelemetrySemantic semantic) {
         static constexpr std::array names{"angle",

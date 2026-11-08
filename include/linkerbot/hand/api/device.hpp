@@ -200,6 +200,9 @@ namespace linkerbot::hand {
 
         void start_polling();
         void start_polling(const PollingPlan &plan);
+        // Python policy: remove future poll demand and boundedly drain claimed polls.
+        // A timeout keeps the device open and the desired polling plan disabled.
+        // Coalesced active readers continue; Native stop behavior is unchanged.
         void stop_polling();
 
         // Ends the active generation, recovers the backend, verifies that the
