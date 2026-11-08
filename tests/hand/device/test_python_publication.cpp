@@ -67,6 +67,7 @@ TEST_CASE("Python identity has its own sample sequence and retained invalid evid
     REQUIRE((before.device_info->meta.sequence == 1));
     const auto refreshed = device.hand.refresh_device_info(1s);
     REQUIRE((refreshed.meta.sequence == 2));
+    REQUIRE((refreshed.meta.age.has_value()));
     REQUIRE((refreshed.meta.collected_at == refreshed.timestamp));
     REQUIRE((refreshed.meta.connection_generation > 0));
     const auto after = device.hand.get_cached_snapshot();
@@ -350,4 +351,94 @@ TEST_CASE("Python O30 force absence degrades immediately without changing other 
     REQUIRE((caps.supports(TelemetrySemantic::kAngles)));
     HandSnapshot snapshot;
     REQUIRE_NOTHROW(state.project(snapshot, state.view(), caps));
+}
+
+TEST_CASE("Python fulfilled feedback cancels only the still-unclaimed poll ticket", "[comm][python-phase3]") {
+    for (const auto policy : {AngleFeedbackPolicy::kAdaptive, AngleFeedbackPolicy::kQueryOnly}) {
+        PythonState state(profile());
+        state.replace({{TelemetrySemantic::kAngles, 1s, policy}});
+        const auto ticket = state.take_poll();
+        REQUIRE((ticket.has_value()));
+        REQUIRE((state.poll_needed(*ticket)));
+        state.publish("angle", publication(2, protocol::Origin::command_feedback));
+        REQUIRE((state.poll_needed(*ticket) == (policy == AngleFeedbackPolicy::kQueryOnly)));
+        state.stop_polling();
+        REQUIRE_FALSE(state.poll_needed(*ticket));
+    }
+}
+
+TEST_CASE("Python retained publication view rejects undeclared and partial domains", "[comm][python-phase3]") {
+    PythonState state(profile());
+    state.publish("external/domain", publication(1));
+    state.publish("tactile/177", publication(2));
+    REQUIRE((state.view().samples.empty()));
+    REQUIRE((state.view().sequence == 0));
+    state.publish("angle", publication(3));
+    REQUIRE((state.view().samples.size() == 1));
+    REQUIRE((state.view().sequence == 1));
+}
+
+TEST_CASE("Python response-cache reads preserve publication metadata without sending", "[comm][python-phase3]") {
+    validation::FakeHand device(profile());
+    const auto initial = device.transport->sent().size();
+    REQUIRE_THROWS_AS(device.hand.get_configured_speeds(1s), UnsupportedOperationError);
+    REQUIRE((device.transport->sent().size() == initial));
+    validation::complete(device.hand.set_speeds(std::vector<double>(6, 12)));
+    const auto count = device.transport->sent().size();
+    const auto before = device.hand.get_cached_snapshot();
+    const auto first = device.hand.get_configured_speeds(1s);
+    const auto second = device.hand.get_configured_speeds(1s);
+    REQUIRE((first.raw == std::vector<double>(6, 12)));
+    REQUIRE((first.meta.sequence == 1));
+    REQUIRE((second.meta.sequence == first.meta.sequence));
+    REQUIRE((device.hand.get_cached_snapshot().snapshot_sequence == before.snapshot_sequence));
+    REQUIRE((device.transport->sent().size() == count));
+}
+
+TEST_CASE("Python angle dispatch is observable while response observation retains its device lane",
+          "[comm][python-phase3]") {
+    auto config = profile();
+    config.response_timeout = 2s;
+    validation::FakeHand device(config);
+    device.transport->on_request(0x28, [](const auto &request) {
+        if (request.data[0] == 1 && request.dlc > 1) {
+            return std::vector<linkerbot::can::Message>{};
+        }
+        return validation::l6_reply(request);
+    });
+    auto command = device.hand.set_angles(std::vector<int32_t>(6, 19));
+    validation::complete(command);
+    const auto sent = device.transport->sent().size();
+    auto read = std::async(std::launch::async, [&] { return device.hand.get_angles(2s); });
+    const auto blocked = read.wait_for(20ms);
+    const auto count = device.transport->sent().size();
+    linkerbot::can::Message response{};
+    response.id = 0x28;
+    response.dlc = 7;
+    response.data[0] = 1;
+    std::fill_n(response.data.begin() + 1, 6, uint8_t{19});
+    device.transport->inject(response);
+    const auto value = read.get();
+    REQUIRE((blocked == std::future_status::timeout));
+    REQUIRE((count == sent));
+    REQUIRE((value.raw == std::vector<double>(6, 64)));
+    REQUIRE((command.stage() == CommandStage::kDispatched));
+}
+
+TEST_CASE("Python adaptive feedback discards a redundant poll queued behind a command", "[comm][python-phase3]") {
+    validation::FakeHand device(profile());
+    auto command = device.block();
+    device.hand.start_polling({{TelemetrySemantic::kAngles, 1s, AngleFeedbackPolicy::kAdaptive}});
+    std::this_thread::sleep_for(20ms);
+    device.transport->release_tx_gate();
+    validation::complete(command);
+    REQUIRE((eventually([&] {
+        return device.hand.get_cached_snapshot().angles->meta.delivery == TelemetryDelivery::kCommandResponse;
+    })));
+    std::this_thread::sleep_for(20ms);
+    device.hand.stop_polling();
+    const auto frames = device.transport->sent();
+    const auto queries = std::count_if(frames.begin(), frames.end(),
+                                       [](const auto &frame) { return frame.data[0] == 1 && frame.dlc == 1; });
+    REQUIRE((queries == 1)); // Only the initialization baseline.
 }

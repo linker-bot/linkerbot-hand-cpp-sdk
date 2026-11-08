@@ -61,6 +61,7 @@ namespace linkerbot::hand::unified_detail {
         const bool six = config.model == Model::kL6 || config.model == Model::kO6;
         const bool identity = plan.domain.find("version") != std::string::npos;
         const bool tactile = (plan.domain.find("force") != std::string::npos && plan.domain.rfind("python/", 0) != 0) ||
+                             plan.domain.rfind("tactile", 0) == 0 ||
                              (config.model == Model::kL30 && python_l30_tactile(plan));
         if (six && !identity && !tactile) {
             window = 50ms;

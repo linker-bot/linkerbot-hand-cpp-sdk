@@ -488,7 +488,7 @@ TEST_CASE("Python unclaimed reads with no remaining callers do not send after th
     REQUIRE((device.hand.is_open()));
 }
 
-TEST_CASE("Python poll demand survives its internal waiter timeout while the device lane is busy",
+TEST_CASE("Python query-only poll demand survives its internal waiter timeout while the device lane is busy",
           "[comm][python-phase2]") {
     struct State {
         std::promise<void> polled;
@@ -504,7 +504,7 @@ TEST_CASE("Python poll demand survives its internal waiter timeout while the dev
         return validation::l6_reply(request);
     });
     auto claimed = device.block();
-    device.hand.start_polling({{TelemetrySemantic::kAngles, 2s}});
+    device.hand.start_polling({{TelemetrySemantic::kAngles, 2s, AngleFeedbackPolicy::kQueryOnly}});
     std::this_thread::sleep_for(150ms); // Longer than the internal 100 ms poll wait.
     device.transport->release_tx_gate();
     validation::complete(claimed);

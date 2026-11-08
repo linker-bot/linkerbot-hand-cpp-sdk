@@ -31,6 +31,8 @@ namespace linkerbot::hand::unified_detail {
         static void stop_endpoint(runtime::DeviceRuntime &runtime);
         static void resume_endpoint(runtime::DeviceRuntime &runtime);
         static void flush_sends(runtime::DeviceRuntime &runtime);
+        static void wait_command_feedback(runtime::DeviceRuntime &runtime,
+                                          const std::function<bool()> &generation_valid);
         static void drain_sends(runtime::DeviceRuntime &runtime, runtime::Deadline deadline);
         static bool uses_response_windows(const runtime::DeviceRuntime &runtime);
         using FinalSend = std::function<bool(const runtime::TransactionPlan &)>;

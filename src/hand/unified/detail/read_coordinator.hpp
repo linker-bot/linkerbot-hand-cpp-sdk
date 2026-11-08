@@ -46,7 +46,8 @@ namespace linkerbot::hand::unified_detail {
                 polling);
         }
         Value read_prepared(unsigned key, Clock::time_point deadline, Execute execute, Prepare prepare,
-                            bool polling = false, transport::CancellationToken poll_cancel = {}) {
+                            bool polling = false, transport::CancellationToken poll_cancel = {},
+                            std::function<bool()> poll_demand = {}) {
             std::unique_lock<std::mutex> lock(mutex_);
             if (!accepting_) {
                 throw ClosedError("read generation ended");
@@ -84,6 +85,7 @@ namespace linkerbot::hand::unified_detail {
             } else {
                 entry->requested_by_poll = true;
                 entry->poll_cancel = std::move(poll_cancel);
+                entry->poll_demand = std::move(poll_demand);
             }
             changed_.notify_all();
             bool completed = true;
@@ -188,6 +190,7 @@ namespace linkerbot::hand::unified_detail {
             Execute execute;
             Prepare prepare;
             transport::CancellationToken poll_cancel;
+            std::function<bool()> poll_demand;
             bool requested_by_poll = false;
             uint64_t generation = 0;
             std::optional<Value> value;
@@ -201,7 +204,8 @@ namespace linkerbot::hand::unified_detail {
         bool demand_locked(const Entry &entry) const {
             return accepting_ && !entry.done && entry.generation == generation_ &&
                    (entry.claimed || (entry.waiters != 0 && Clock::now() < entry.last_waiter_deadline) ||
-                    (entry.requested_by_poll && !entry.poll_cancel.cancelled()));
+                    (entry.requested_by_poll && !entry.poll_cancel.cancelled() &&
+                     (!entry.poll_demand || entry.poll_demand())));
         }
         void run() {
             std::unique_lock<std::mutex> lock(mutex_);

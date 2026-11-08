@@ -33,7 +33,13 @@ namespace linkerbot::hand::unified_detail {
         bool replace(const PollingPlan &plan);
         void stop_polling();
         std::optional<runtime::Deadline> next_poll() const;
-        std::optional<TelemetrySemantic> take_poll();
+        struct PollTicket {
+            TelemetrySemantic semantic;
+            uint64_t feedback;
+            uint64_t plan;
+        };
+        std::optional<PollTicket> take_poll();
+        bool poll_needed(const PollTicket &ticket) const;
         void project_health(HandHealth &health) const;
         std::string domain(TelemetrySemantic semantic) const;
         void project(HandSnapshot &snapshot, const View &view, const DeviceCapabilities &caps) const;
@@ -66,6 +72,7 @@ namespace linkerbot::hand::unified_detail {
         std::map<TelemetrySemantic, Poll> polls_;
         std::optional<PollingPlan> plan_;
         uint64_t identity_sequence_ = 0;
+        uint64_t plan_sequence_ = 0;
         bool stopped_ = false;
         bool ready_ = false;
     };

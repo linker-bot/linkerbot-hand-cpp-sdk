@@ -2901,3 +2901,14 @@ void linkerbot::hand::unified_detail::RuntimeAccess::with_snapshot_view(
     runtime::current_snapshot_view = runtime::SnapshotView{&device, &samples};
     read();
 }
+
+void linkerbot::hand::unified_detail::RuntimeAccess::wait_command_feedback(
+    runtime::DeviceRuntime &device, const std::function<bool()> &generation_valid) {
+    auto &p = *device.impl_;
+    std::unique_lock<std::mutex> lock(p.mutex);
+    p.cv.wait(lock, [&] {
+        return p.health.state != runtime::DeviceState::ready || (generation_valid && !generation_valid()) ||
+               std::none_of(p.pending.begin(), p.pending.end(),
+                            [](const auto &request) { return request->plan.optional_response_window.has_value(); });
+    });
+}

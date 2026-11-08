@@ -253,6 +253,9 @@ namespace linkerbot::hand::unified_detail {
                                 }
                             },
                             std::move(admit_send));
+                        if (python_ && !request.operation && request.semantic == CommandSemantic::kAngles) {
+                            RuntimeAccess::wait_command_feedback(*device_->runtime(), request.generation_valid);
+                        }
                     });
                 } catch (...) {
                     if (request.delivery && request.ack_expectation == AckExpectation::kNone) {
@@ -295,7 +298,8 @@ namespace linkerbot::hand::unified_detail {
             }
             [[nodiscard]] TelemetrySample coordinated_read(TelemetrySemantic semantic,
                                                            std::chrono::milliseconds timeout, bool polling,
-                                                           runtime::CancellationToken poll_cancel = {}) {
+                                                           runtime::CancellationToken poll_cancel = {},
+                                                           std::function<bool()> poll_demand = {}) {
                 if (!capabilities_.supports(semantic)) {
                     throw UnsupportedOperationError("telemetry semantic is not supported by this device");
                 }
@@ -354,7 +358,7 @@ namespace linkerbot::hand::unified_detail {
                                 return execution_gate_->acquire(false, runtime::Deadline::max(), {},
                                                                 [valid, demand] { return valid() && demand(); });
                             },
-                            polling, poll_cancel);
+                            polling, poll_cancel, poll_demand);
                         auto sample = std::get<TelemetrySample>(std::move(value));
                         const bool fresh = std::visit(
                             [&](const auto &reading) { return reading.meta.valid && reading.meta.sequence > baseline; },
@@ -588,6 +592,7 @@ namespace linkerbot::hand::unified_detail {
                     identity.meta.origin = TelemetryValueOrigin::kDeviceConfigured;
                     identity.meta.delivery = TelemetryDelivery::kQueryResponse;
                     identity.meta.collected_at = identity.timestamp;
+                    identity.meta.age = runtime::Clock::now() - identity.timestamp;
                     identity.meta.connection_generation = provenance.device_generation;
                     identity.meta.sequence = 1;
                     provenance.received_at = identity.timestamp;
@@ -617,12 +622,14 @@ namespace linkerbot::hand::unified_detail {
                     task.period = std::chrono::milliseconds{1};
                     task.next = [state = python_] { return state->next_poll(); };
                     task.run = [this](runtime::CancellationToken token) {
-                        const auto semantic = python_->take_poll();
-                        if (!semantic || token.cancelled()) {
+                        const auto ticket = python_->take_poll();
+                        if (!ticket || token.cancelled()) {
                             return;
                         }
                         try {
-                            (void)coordinated_read(*semantic, config_.transaction_timeout, true, token);
+                            (void)coordinated_read(
+                                ticket->semantic, config_.transaction_timeout, true, token,
+                                [state = python_, ticket = *ticket] { return state->poll_needed(ticket); });
                         } catch (const TimeoutError &) {
                             return;
                         } catch (const ClosedError &) {
@@ -667,6 +674,9 @@ namespace linkerbot::hand::unified_detail {
 
             void assert_external_lifecycle() const override { device_->runtime()->assert_external_lifecycle(); }
             void stop_admission() override {
+                if (python_) {
+                    python_->stop();
+                }
                 if (reads_) {
                     RuntimeAccess::stop_endpoint(*device_->runtime());
                 }
@@ -725,6 +735,9 @@ namespace linkerbot::hand::unified_detail {
                 }
             }
             void close() override {
+                if (python_) {
+                    python_->stop();
+                }
                 reads_closing_.store(true, std::memory_order_release);
                 ++read_epoch_;
                 if (reads_) {

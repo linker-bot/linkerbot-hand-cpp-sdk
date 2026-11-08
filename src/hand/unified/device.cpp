@@ -1040,7 +1040,11 @@ namespace linkerbot::hand {
         if (impl_->state_.load(std::memory_order_acquire) != Impl::State::kReady) {
             return std::nullopt;
         }
-        return impl_->identity_;
+        auto result = impl_->identity_;
+        if (result && result->meta.valid) {
+            unified_detail::complete_freshness(result->meta, nullptr, runtime::Clock::now());
+        }
+        return result;
     }
 
     std::optional<DeviceCapabilities> HandDevice::get_verified_capabilities() const {

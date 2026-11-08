@@ -135,3 +135,52 @@ TEST_CASE("read deadlines precede results and errors published after their wait 
         REQUIRE((result == ErrorCode::kTimeout));
     }
 }
+
+TEST_CASE("fulfilled poll demand does not revoke an explicit shared reader", "[comm][python-phase3]") {
+    for (const bool explicit_reader : {false, true}) {
+        unified_detail::ReadCoordinator<int> reads(1);
+        std::atomic<bool> needed{true};
+        std::atomic<unsigned> executions{0};
+        std::promise<void> preparing, release;
+        auto gate = release.get_future().share();
+        auto poll = std::async(std::launch::async, [&] {
+            try {
+                return reads.read_prepared(
+                    1, std::chrono::steady_clock::now() + 2s,
+                    [&](const auto &) {
+                        ++executions;
+                        return 7;
+                    },
+                    [&](const auto &) {
+                        preparing.set_value();
+                        gate.wait();
+                        return std::shared_ptr<void>{};
+                    },
+                    true, {}, [&] { return needed.load(); });
+            } catch (const ClosedError &) {
+                return 0;
+            }
+        });
+        preparing.get_future().wait();
+        std::future<int> reader;
+        if (explicit_reader) {
+            reader = std::async(std::launch::async, [&] {
+                return reads.read(1, std::chrono::steady_clock::now() + 2s, [&] {
+                    ++executions;
+                    return 7;
+                });
+            });
+            REQUIRE((reader.wait_for(20ms) == std::future_status::timeout));
+        }
+        needed = false;
+        release.set_value();
+        const auto polled = poll.get();
+        if (explicit_reader) {
+            REQUIRE((reader.get() == 7));
+            REQUIRE((executions == 1));
+        } else {
+            REQUIRE((polled == 0));
+            REQUIRE((executions == 0));
+        }
+    }
+}

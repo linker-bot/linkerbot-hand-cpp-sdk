@@ -96,11 +96,12 @@ namespace linkerbot::hand::unified_detail {
             }
             return;
         }
-        // Native domains are SDK-owned and protocol-bounded, not user queues.
-        current_.samples[name] = sample;
         if (found == domains_.end() && !identity) {
             return;
         }
+        // Keep only complete, declared channels. Partial assembler domains and
+        // externally published names cannot grow the retained view.
+        current_.samples[name] = sample;
         if (identity) {
             auto value = std::any_cast<DeviceIdentity>(sample.value);
             value.meta.sequence = ++identity_sequence_;
@@ -160,6 +161,7 @@ namespace linkerbot::hand::unified_detail {
         failures_.clear();
         disabled_.clear();
         polls_.clear();
+        ++plan_sequence_;
         plan_.reset();
         identity_sequence_ = 0;
         stopped_ = false;
@@ -273,12 +275,14 @@ namespace linkerbot::hand::unified_detail {
                               now});
         }
         plan_ = plan;
+        ++plan_sequence_;
         polls_ = std::move(next);
         return true;
     }
     void PythonState::stop_polling() {
         const std::lock_guard<std::mutex> lock(mutex_);
         plan_.reset();
+        ++plan_sequence_;
         polls_.clear();
     }
     std::optional<runtime::Deadline> PythonState::next_poll() const {
@@ -292,7 +296,7 @@ namespace linkerbot::hand::unified_detail {
         }
         return result;
     }
-    std::optional<S> PythonState::take_poll() {
+    std::optional<PythonState::PollTicket> PythonState::take_poll() {
         const std::lock_guard<std::mutex> lock(mutex_);
         const auto now = runtime::Clock::now();
         auto selected = polls_.end();
@@ -311,7 +315,14 @@ namespace linkerbot::hand::unified_detail {
         const bool command_only =
             selected->first == S::kAngles && state.channel.angle_feedback == AngleFeedbackPolicy::kCommandFeedbackOnly;
         state.missed += command_only ? periods : periods - 1;
-        return command_only ? std::nullopt : std::optional<S>{selected->first};
+        return command_only ? std::nullopt
+                            : std::optional<PollTicket>{{selected->first, state.feedback, plan_sequence_}};
+    }
+    bool PythonState::poll_needed(const PollTicket &ticket) const {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        const auto found = polls_.find(ticket.semantic);
+        return !stopped_ && ticket.plan == plan_sequence_ && found != polls_.end() && found->second.enabled &&
+               found->second.feedback == ticket.feedback;
     }
     void PythonState::project_health(HandHealth &health) const {
         const std::lock_guard<std::mutex> lock(mutex_);
