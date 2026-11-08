@@ -56,28 +56,30 @@ TEST_CASE("Python channel sequences count publications independently of cache re
     REQUIRE((current.snapshot_sequence >= first.snapshot_sequence + 3));
     const auto repeated = device.hand.get_cached_snapshot();
     REQUIRE((repeated.snapshot_sequence == current.snapshot_sequence));
-    REQUIRE((repeated.angles->meta.sequence == current.angles->meta.sequence));
+    REQUIRE((test_support::require_value(repeated.angles).meta.sequence ==
+             test_support::require_value(current.angles).meta.sequence));
 }
 
 TEST_CASE("Python identity has its own sample sequence and retained invalid evidence", "[comm][python-phase3]") {
     validation::FakeHand device(profile());
     const auto before = device.hand.get_cached_snapshot();
     REQUIRE((before.device_info.has_value()));
-    REQUIRE((before.device_info->meta.valid));
-    REQUIRE((before.device_info->meta.sequence == 1));
+    REQUIRE((test_support::require_value(before.device_info).meta.valid));
+    REQUIRE((test_support::require_value(before.device_info).meta.sequence == 1));
     const auto refreshed = device.hand.refresh_device_info(1s);
     REQUIRE((refreshed.meta.sequence == 2));
     REQUIRE((refreshed.meta.age.has_value()));
     REQUIRE((refreshed.meta.collected_at == refreshed.timestamp));
     REQUIRE((refreshed.meta.connection_generation > 0));
     const auto after = device.hand.get_cached_snapshot();
-    REQUIRE((after.angles->meta.sequence == before.angles->meta.sequence));
+    REQUIRE((test_support::require_value(after.angles).meta.sequence ==
+             test_support::require_value(before.angles).meta.sequence));
     REQUIRE((after.snapshot_sequence > before.snapshot_sequence));
     device.hand.close();
     const auto closed = device.hand.get_cached_snapshot();
     REQUIRE((closed.device_info.has_value()));
-    REQUIRE_FALSE(closed.device_info->meta.valid);
-    REQUIRE((closed.device_info->serial_number == refreshed.serial_number));
+    REQUIRE_FALSE(test_support::require_value(closed.device_info).meta.valid);
+    REQUIRE((test_support::require_value(closed.device_info).serial_number == refreshed.serial_number));
 }
 
 TEST_CASE("Python publication filtering retains exact non-command revisions", "[comm][python-phase3]") {
@@ -116,7 +118,7 @@ TEST_CASE("Python retained-cache waiter wakes on close without device I/O", "[co
     device.hand.close();
     REQUIRE((waiter.wait_for(1s) == std::future_status::ready));
     const auto stopped = waiter.get();
-    REQUIRE_FALSE(stopped.angles->meta.valid);
+    REQUIRE_FALSE(test_support::require_value(stopped.angles).meta.valid);
     REQUIRE((count > 0));
 }
 
@@ -177,9 +179,9 @@ TEST_CASE("Python adaptive angle feedback defers queries but query-only does not
     for (const auto policy : {AngleFeedbackPolicy::kAdaptive, AngleFeedbackPolicy::kQueryOnly}) {
         PythonState state(profile());
         REQUIRE((state.replace({{TelemetrySemantic::kAngles, 200ms, policy}})));
-        const auto due = *state.next_poll();
+        const auto due = test_support::require_value(state.next_poll());
         state.publish("angle", publication(1, protocol::Origin::command_feedback));
-        REQUIRE(((*state.next_poll() > due) == (policy == AngleFeedbackPolicy::kAdaptive)));
+        REQUIRE(((test_support::require_value(state.next_poll()) > due) == (policy == AngleFeedbackPolicy::kAdaptive)));
         HandHealth health;
         state.project_health(health);
         REQUIRE((health.channels.at(0).command_feedback_samples == 1));
@@ -206,9 +208,11 @@ TEST_CASE("Python command-only polling emits no angle queries and rejects illega
     device.hand.start_polling({{TelemetrySemantic::kAngles, 10ms, AngleFeedbackPolicy::kCommandFeedbackOnly}});
     std::this_thread::sleep_for(30ms);
     REQUIRE((device.transport->sent().size() == count));
-    REQUIRE_THROWS_AS(
-        device.hand.start_polling({{TelemetrySemantic::kAngles, 10ms, static_cast<AngleFeedbackPolicy>(255)}}),
-        PollingPlanError);
+    // The fixed uint8_t representation is valid; the policy value is deliberately unknown.
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+    const auto unknown_policy = static_cast<AngleFeedbackPolicy>(255);
+    REQUIRE_THROWS_AS(device.hand.start_polling({{TelemetrySemantic::kAngles, 10ms, unknown_policy}}),
+                      PollingPlanError);
     REQUIRE((device.hand.get_health().polling_active));
     device.hand.stop_polling();
 }
@@ -221,14 +225,15 @@ TEST_CASE("Python filtered facade wait retains command feedback until a query wa
     auto command = device.hand.set_angles(std::vector<int32_t>(6, 11));
     validation::complete(command);
     REQUIRE((eventually([&] {
-        return device.hand.get_cached_snapshot().angles->meta.delivery == TelemetryDelivery::kCommandResponse;
+        return test_support::require_value(device.hand.get_cached_snapshot().angles).meta.delivery ==
+               TelemetryDelivery::kCommandResponse;
     })));
     REQUIRE((waiter.wait_for(20ms) == std::future_status::timeout));
     (void)device.hand.get_faults(1s);
     REQUIRE((waiter.wait_for(1s) == std::future_status::ready));
     const auto value = waiter.get();
     REQUIRE((value.snapshot_sequence > before.snapshot_sequence));
-    REQUIRE((value.angles->raw == std::vector<double>(6, 11)));
+    REQUIRE((test_support::require_value(value.angles).raw == std::vector<double>(6, 11)));
 }
 
 TEST_CASE("force aggregation replaces one query and updates scalar raw evidence", "[comm][python-phase3]") {
@@ -359,11 +364,12 @@ TEST_CASE("Python fulfilled feedback cancels only the still-unclaimed poll ticke
         state.replace({{TelemetrySemantic::kAngles, 1s, policy}});
         const auto ticket = state.take_poll();
         REQUIRE((ticket.has_value()));
-        REQUIRE((state.poll_needed(*ticket)));
+        REQUIRE((state.poll_needed(test_support::require_value(ticket))));
         state.publish("angle", publication(2, protocol::Origin::command_feedback));
-        REQUIRE((state.poll_needed(*ticket) == (policy == AngleFeedbackPolicy::kQueryOnly)));
+        REQUIRE(
+            (state.poll_needed(test_support::require_value(ticket)) == (policy == AngleFeedbackPolicy::kQueryOnly)));
         state.stop_polling();
-        REQUIRE_FALSE(state.poll_needed(*ticket));
+        REQUIRE_FALSE(state.poll_needed(test_support::require_value(ticket)));
     }
 }
 
@@ -433,7 +439,8 @@ TEST_CASE("Python adaptive feedback discards a redundant poll queued behind a co
     device.transport->release_tx_gate();
     validation::complete(command);
     REQUIRE((eventually([&] {
-        return device.hand.get_cached_snapshot().angles->meta.delivery == TelemetryDelivery::kCommandResponse;
+        return test_support::require_value(device.hand.get_cached_snapshot().angles).meta.delivery ==
+               TelemetryDelivery::kCommandResponse;
     })));
     std::this_thread::sleep_for(20ms);
     device.hand.stop_polling();
@@ -473,6 +480,7 @@ TEST_CASE("Python rejects a degraded polling channel before replacing an existin
     REQUIRE_THROWS_AS(device.hand.get_currents(1s), UnsupportedFirmwareError);
     device.hand.start_polling({{TelemetrySemantic::kAngles, 10ms, AngleFeedbackPolicy::kQueryOnly}});
     REQUIRE_THROWS_AS(device.hand.start_polling({{TelemetrySemantic::kCurrents, 10ms}}), PollingPlanError);
-    REQUIRE((eventually([&] { return device.hand.get_cached_snapshot().angles->meta.sequence >= 2; })));
+    REQUIRE((eventually(
+        [&] { return test_support::require_value(device.hand.get_cached_snapshot().angles).meta.sequence >= 2; })));
     device.hand.stop_polling();
 }

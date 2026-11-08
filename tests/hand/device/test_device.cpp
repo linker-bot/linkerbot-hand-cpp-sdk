@@ -4046,23 +4046,23 @@ TEST_CASE("Python published metadata is stable across Classic and L30 models", "
         });
         device.open();
         const auto initial = device.get_cached_snapshot();
-        REQUIRE((initial.angles->meta.sequence == 1));
-        REQUIRE((initial.faults->meta.sequence == 1));
+        REQUIRE((test_support::require_value(initial.angles).meta.sequence == 1));
+        REQUIRE((test_support::require_value(initial.faults).meta.sequence == 1));
         (void)device.get_angles(2s);
         (void)device.get_angles(2s);
         const auto updated = device.get_cached_snapshot();
-        REQUIRE((updated.angles->meta.sequence == 3));
-        REQUIRE((updated.faults->meta.sequence == 1));
-        REQUIRE((updated.device_info->meta.sequence == 1));
-        REQUIRE((updated.device_info->meta.valid));
+        REQUIRE((test_support::require_value(updated.angles).meta.sequence == 3));
+        REQUIRE((test_support::require_value(updated.faults).meta.sequence == 1));
+        REQUIRE((test_support::require_value(updated.device_info).meta.sequence == 1));
+        REQUIRE((test_support::require_value(updated.device_info).meta.valid));
         device.close();
         device.open();
         const auto reopened = device.get_cached_snapshot();
         REQUIRE((reopened.connection_generation == 2));
-        REQUIRE((reopened.angles->meta.sequence == 1));
-        REQUIRE((reopened.angles->meta.connection_generation == 2));
-        REQUIRE((reopened.device_info->meta.connection_generation == 2));
-        REQUIRE((device.get_identity()->meta.connection_generation == 2));
+        REQUIRE((test_support::require_value(reopened.angles).meta.sequence == 1));
+        REQUIRE((test_support::require_value(reopened.angles).meta.connection_generation == 2));
+        REQUIRE((test_support::require_value(reopened.device_info).meta.connection_generation == 2));
+        REQUIRE((test_support::require_value(device.get_identity()).meta.connection_generation == 2));
         REQUIRE((device.get_angles(2s).meta.connection_generation == 2));
         device.close();
     }
@@ -4093,8 +4093,8 @@ TEST_CASE("Python L20Lite scalar queries retain independent data and degradation
     REQUIRE((transport->sent().back().data[0] == 0x21));
     REQUIRE((tangential.field("fns") == nullptr));
     const auto cached = device.get_cached_snapshot();
-    REQUIRE((cached.force->field("fns")->meta.sequence == sequence));
-    REQUIRE((cached.force->field("fts")->meta.sequence == 1));
+    REQUIRE((test_support::require_value(cached.force).field("fns")->meta.sequence == sequence));
+    REQUIRE((test_support::require_value(cached.force).field("fts")->meta.sequence == 1));
     transport->on_request(0x28, [](const Message &request) {
         if (request.data[0] == 0x23) {
             return std::vector<Message>{};
@@ -4107,7 +4107,7 @@ TEST_CASE("Python L20Lite scalar queries retain independent data and degradation
     REQUIRE((device.get_capabilities().force_field("px").firmware_unsupported));
     REQUIRE((device.get_capabilities().force_field("fns").supported == true));
     REQUIRE((device.get_force({"fns"}, 1s).field("fns")->meta.sequence > sequence));
-    REQUIRE((device.get_cached_snapshot().force->status("px") == "unsupported"));
+    REQUIRE((test_support::require_value(device.get_cached_snapshot().force).status("px") == "unsupported"));
     device.close();
 }
 
@@ -4135,8 +4135,9 @@ TEST_CASE("Python optional polling degradation preserves other poll channels and
     device.start_polling({{TelemetrySemantic::kCurrents, 10ms}, {TelemetrySemantic::kAngles, 10ms}});
     REQUIRE((wait_until([&] { return !device.get_capabilities().supports(TelemetrySemantic::kCurrents); })));
     REQUIRE((device.get_health().connected()));
-    const auto before = device.get_cached_snapshot().angles->meta.sequence;
-    REQUIRE((wait_until([&] { return device.get_cached_snapshot().angles->meta.sequence > before; })));
+    const auto before = test_support::require_value(device.get_cached_snapshot().angles).meta.sequence;
+    REQUIRE((wait_until(
+        [&] { return test_support::require_value(device.get_cached_snapshot().angles).meta.sequence > before; })));
     device.stop_polling();
     device.recover_for(2s);
     REQUIRE((device.get_capabilities().supports(TelemetrySemantic::kCurrents)));

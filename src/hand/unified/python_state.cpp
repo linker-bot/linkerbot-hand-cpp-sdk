@@ -340,9 +340,9 @@ namespace linkerbot::hand::unified_detail {
             }
             found->polling_active = state.enabled;
             found->supported = disabled_.count(semantic) == 0;
-            found->requested_hz = state.enabled ? 1000.0 / state.channel.interval.count() : 0;
+            found->requested_hz = state.enabled ? 1000.0 / static_cast<double>(state.channel.interval.count()) : 0;
             const auto seconds = std::chrono::duration<double>(now - state.started).count();
-            found->achieved_hz = seconds > 0 ? state.feedback / seconds : 0;
+            found->achieved_hz = seconds > 0 ? static_cast<double>(state.feedback) / seconds : 0;
             found->completed_reads = state.reads;
             found->feedback_samples = state.feedback;
             found->command_feedback_samples = state.commands;

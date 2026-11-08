@@ -767,7 +767,8 @@ namespace linkerbot::hand {
             // Advance the readable generation only after initialization state is installed.
             ++impl_->cache_generation_;
             if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython && impl_->identity_) {
-                impl_->identity_->meta.connection_generation = impl_->cache_generation_;
+                ::linkerbot::hand::detail::checked_value(impl_->identity_, "missing initialized identity")
+                    .meta.connection_generation = impl_->cache_generation_;
             }
             impl_->cache_physical_generation_ = physical_generation;
             impl_->cached_source_sequence_.reset();
@@ -1692,7 +1693,8 @@ namespace linkerbot::hand {
                 // Advance the readable generation only after initialization state is installed.
                 ++impl_->cache_generation_;
                 if (python && impl_->identity_) {
-                    impl_->identity_->meta.connection_generation = impl_->cache_generation_;
+                    ::linkerbot::hand::detail::checked_value(impl_->identity_, "missing initialized identity")
+                        .meta.connection_generation = impl_->cache_generation_;
                 }
                 impl_->cache_physical_generation_ = physical_generation;
                 impl_->cached_source_sequence_.reset();
