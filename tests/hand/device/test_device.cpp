@@ -4371,7 +4371,8 @@ TEST_CASE("Python L20 idle late write replies do not publish or complete future 
     const auto after = device.get_snapshot();
     REQUIRE(after.currents.has_value() == before.currents.has_value());
     if (before.currents) {
-        REQUIRE(after.currents->meta.sequence == before.currents->meta.sequence);
+        REQUIRE(test_support::require_value(after.currents).meta.sequence ==
+                test_support::require_value(before.currents).meta.sequence);
     }
     REQUIRE(after.measured_speeds.has_value() == before.measured_speeds.has_value());
     REQUIRE(wait_until([&] { return device.get_health().transaction_latency.count == latency + 1; }));
