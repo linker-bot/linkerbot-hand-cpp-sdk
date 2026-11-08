@@ -74,10 +74,10 @@ endif()
 
 # Hardware-in-the-loop cases live under [l6]/[o6]/[l20lite]/[l20]/[l30]/[o30] and need a real CAN interface.
 # Default ctest only runs FakeTransport integration tests.
-add_test(NAME comm COMMAND tests "[comm]")
+add_test(NAME comm COMMAND tests "[comm]" --durations yes)
 # Discovery contract and adapter tests are offline: injected enumerators and
 # FakeTransport cover platform sources without opening host CAN hardware.
-add_test(NAME discovery COMMAND tests "[discovery]")
+add_test(NAME discovery COMMAND tests "[discovery]" --durations yes)
 
 if(TARGET l6_read_version)
     add_dependencies(tests l6_read_version)

@@ -353,9 +353,9 @@ namespace linkerbot::hand::unified_detail {
                                 ReadValue result;
                                 auto capture = std::make_shared<std::atomic<uint64_t>>(0);
                                 const auto before = RuntimeAccess::error_revision(*device_->runtime());
-                                with_windows(
+                                with_python_read_windows(
                                     [&] { result = python_read(semantic, polling, valid, lane, capture, before); },
-                                    valid, false, capture);
+                                    valid, capture);
                                 return result;
                             },
                             [this, valid](const std::function<bool()> &demand) {
@@ -834,8 +834,15 @@ namespace linkerbot::hand::unified_detail {
                            read_epoch_.load(std::memory_order_acquire) == epoch;
                 };
             }
+            void with_python_read_windows(const std::function<void()> &execute, const std::function<bool()> &valid,
+                                          const RuntimeAccess::ErrorCapture &error_capture) {
+                execute_python_transactions(
+                    *device_->runtime(), config_, execute,
+                    runtime::Deadline{runtime::Clock::duration{execution_deadline_.load(std::memory_order_acquire)}},
+                    valid, false, error_capture);
+            }
             void with_windows(const std::function<void()> &execute, const std::function<bool()> &valid = {},
-                              bool identity = false, RuntimeAccess::ErrorCapture error_capture = {}) {
+                              bool identity = false) {
                 if (config_.runtime_behavior != RuntimeBehavior::kPython) {
                     execute();
                     return;
@@ -845,7 +852,7 @@ namespace linkerbot::hand::unified_detail {
                 execute_python_transactions(
                     *device_->runtime(), config_, execute,
                     runtime::Deadline{runtime::Clock::duration{execution_deadline_.load(std::memory_order_acquire)}},
-                    valid, identity, std::move(error_capture));
+                    valid, identity);
             }
             HandDeviceConfig config_;
             DeviceCapabilities capabilities_;
@@ -871,6 +878,76 @@ namespace linkerbot::hand::unified_detail {
 
         template <typename Side> [[nodiscard]] Side concrete_side(HandSide side) {
             return side == HandSide::kLeft ? Side::kLeft : Side::kRight;
+        }
+        std::unique_ptr<DeviceBackend> make_model_backend(const HandDeviceConfig &config,
+                                                          const std::shared_ptr<transport::Session> &session,
+                                                          std::shared_ptr<transport::Session> owned_session) {
+            const bool injected = static_cast<bool>(session);
+            switch (config.model) {
+            case Model::kL6: {
+                const auto side = concrete_side<l6::Side>(config.side);
+                if (config.l6_protocol == L6Protocol::kHopV004) {
+                    auto hand =
+                        std::make_unique<l6::HopL6>(side, session, config.address.value_or(l6::hop::kDefaultRequestId));
+                    return backend<l6::HopL6, l6::kJointCount>(std::move(hand), std::move(owned_session), config);
+                }
+                auto hand =
+                    injected ? std::make_unique<l6::L6>(side, session, config.interface_name, config.angle_mapping_path)
+                             : std::make_unique<l6::L6>(side, config.interface_name, config.angle_mapping_path);
+                return backend<l6::L6, l6::kJointCount>(std::move(hand), std::move(owned_session), config);
+            }
+            case Model::kO6: {
+                const auto side = concrete_side<o6::Side>(config.side);
+                auto hand =
+                    injected ? std::make_unique<o6::O6>(side, session, config.interface_name, config.angle_mapping_path)
+                             : std::make_unique<o6::O6>(side, config.interface_name, config.angle_mapping_path);
+                return backend<o6::O6, o6::kJointCount>(std::move(hand), std::move(owned_session), config);
+            }
+            case Model::kL20Lite: {
+                const auto side = concrete_side<l20lite::Side>(config.side);
+                auto hand = injected ? std::make_unique<l20lite::L20lite>(side, session, config.interface_name,
+                                                                          config.angle_mapping_path)
+                                     : std::make_unique<l20lite::L20lite>(side, config.interface_name,
+                                                                          config.angle_mapping_path);
+                return backend<l20lite::L20lite, l20lite::kJointCount>(std::move(hand), std::move(owned_session),
+                                                                       config);
+            }
+            case Model::kL20: {
+                const auto side = concrete_side<l20::Side>(config.side);
+                auto hand =
+                    injected
+                        ? std::make_unique<l20::L20>(side, session, config.interface_name, config.angle_mapping_path)
+                        : std::make_unique<l20::L20>(side, config.interface_name, config.angle_mapping_path);
+                return backend<l20::L20, l20::kJointCount>(std::move(hand), std::move(owned_session), config);
+            }
+            case Model::kL30: {
+                const auto node_id = static_cast<uint8_t>(config.address.value_or(l30::kDefaultNodeId));
+                const auto host_id = static_cast<uint8_t>(config.host_address.value_or(l30::kDefaultHostId));
+                auto hand =
+                    injected ? std::make_unique<l30::L30>(session, node_id, host_id, config.auto_start_periodic_reports)
+                             : std::make_unique<l30::L30>(config.interface_name, node_id, host_id,
+                                                          config.auto_start_periodic_reports);
+                return backend<l30::L30, l30::kJointCount>(std::move(hand), std::move(owned_session), config);
+            }
+            case Model::kO30: {
+                const auto request_id = config.o30_layout == O30Layout::kPythonV25
+                                            ? config.address.value_or(config.side == HandSide::kLeft ? 2U : 1U)
+                                            : config.address.value_or(o30::protocol::kDefaultRequestId);
+                auto hand = injected ? std::make_unique<o30::O30>(session, request_id)
+                                     : std::make_unique<o30::O30>(config.interface_name, request_id);
+                return backend<o30::O30, o30::kJointCount>(std::move(hand), std::move(owned_session), config);
+            }
+            case Model::kUnknown:
+                break;
+            }
+            throw ValidationError("HandDevice model must not be Unknown");
+        }
+
+        std::unique_ptr<DeviceBackend> make_python_model_backend(const HandDeviceConfig &config,
+                                                                 const std::shared_ptr<transport::Session> &session,
+                                                                 std::shared_ptr<transport::Session> owned_session) {
+            const RuntimeAccess::InboxScope inbox_scope(config.route_queue_capacity.value_or(256));
+            return make_model_backend(config, session, std::move(owned_session));
         }
     } // namespace
 
@@ -904,66 +981,9 @@ namespace linkerbot::hand::unified_detail {
         if (session && config.runtime_behavior == RuntimeBehavior::kPython) {
             RuntimeAccess::retire_closed_profiles(session);
         }
-        std::optional<RuntimeAccess::InboxScope> inbox_scope;
         if (config.runtime_behavior == RuntimeBehavior::kPython) {
-            inbox_scope.emplace(config.route_queue_capacity.value_or(256));
+            return make_python_model_backend(config, session, std::move(owned_session));
         }
-        const bool injected = static_cast<bool>(session);
-        switch (config.model) {
-        case Model::kL6: {
-            const auto side = concrete_side<l6::Side>(config.side);
-            if (config.l6_protocol == L6Protocol::kHopV004) {
-                auto hand =
-                    std::make_unique<l6::HopL6>(side, session, config.address.value_or(l6::hop::kDefaultRequestId));
-                return backend<l6::HopL6, l6::kJointCount>(std::move(hand), std::move(owned_session), config);
-            }
-            auto hand = injected
-                            ? std::make_unique<l6::L6>(side, session, config.interface_name, config.angle_mapping_path)
-                            : std::make_unique<l6::L6>(side, config.interface_name, config.angle_mapping_path);
-            return backend<l6::L6, l6::kJointCount>(std::move(hand), std::move(owned_session), config);
-        }
-        case Model::kO6: {
-            const auto side = concrete_side<o6::Side>(config.side);
-            auto hand = injected
-                            ? std::make_unique<o6::O6>(side, session, config.interface_name, config.angle_mapping_path)
-                            : std::make_unique<o6::O6>(side, config.interface_name, config.angle_mapping_path);
-            return backend<o6::O6, o6::kJointCount>(std::move(hand), std::move(owned_session), config);
-        }
-        case Model::kL20Lite: {
-            const auto side = concrete_side<l20lite::Side>(config.side);
-            auto hand =
-                injected ? std::make_unique<l20lite::L20lite>(side, session, config.interface_name,
-                                                              config.angle_mapping_path)
-                         : std::make_unique<l20lite::L20lite>(side, config.interface_name, config.angle_mapping_path);
-            return backend<l20lite::L20lite, l20lite::kJointCount>(std::move(hand), std::move(owned_session), config);
-        }
-        case Model::kL20: {
-            const auto side = concrete_side<l20::Side>(config.side);
-            auto hand =
-                injected ? std::make_unique<l20::L20>(side, session, config.interface_name, config.angle_mapping_path)
-                         : std::make_unique<l20::L20>(side, config.interface_name, config.angle_mapping_path);
-            return backend<l20::L20, l20::kJointCount>(std::move(hand), std::move(owned_session), config);
-        }
-        case Model::kL30: {
-            const auto node_id = static_cast<uint8_t>(config.address.value_or(l30::kDefaultNodeId));
-            const auto host_id = static_cast<uint8_t>(config.host_address.value_or(l30::kDefaultHostId));
-            auto hand = injected
-                            ? std::make_unique<l30::L30>(session, node_id, host_id, config.auto_start_periodic_reports)
-                            : std::make_unique<l30::L30>(config.interface_name, node_id, host_id,
-                                                         config.auto_start_periodic_reports);
-            return backend<l30::L30, l30::kJointCount>(std::move(hand), std::move(owned_session), config);
-        }
-        case Model::kO30: {
-            const auto request_id = config.o30_layout == O30Layout::kPythonV25
-                                        ? config.address.value_or(config.side == HandSide::kLeft ? 2U : 1U)
-                                        : config.address.value_or(o30::protocol::kDefaultRequestId);
-            auto hand = injected ? std::make_unique<o30::O30>(session, request_id)
-                                 : std::make_unique<o30::O30>(config.interface_name, request_id);
-            return backend<o30::O30, o30::kJointCount>(std::move(hand), std::move(owned_session), config);
-        }
-        case Model::kUnknown:
-            break;
-        }
-        throw ValidationError("HandDevice model must not be Unknown");
+        return make_model_backend(config, session, std::move(owned_session));
     }
 } // namespace linkerbot::hand::unified_detail
