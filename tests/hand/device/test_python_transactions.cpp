@@ -1,4 +1,5 @@
 #include "../../../src/hand/unified/detail/python_identity.hpp"
+#include "../../../src/hand/unified/detail/python_response_boundary.hpp"
 #include "../../../src/hand/unified/detail/python_transactions.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <linkerbot/hand/l20/protocol_backend.hpp>
@@ -136,4 +137,38 @@ TEST_CASE("Python L20 non-angle controls release native reply reservations", "[c
     auto read = unified_detail::python_transaction(backend.make_read("speed"), config);
     REQUIRE(read.consume);
     REQUIRE(read.response_window == 5s);
+}
+
+TEST_CASE("Python response claim boundaries prefer Session order with timestamp fallback",
+          "[comm][python-phase5][l20-dispatch]") {
+    linkerbot::transport::RoutedMessage input;
+    linkerbot::transport::SendResult send;
+    const auto claim = std::chrono::steady_clock::now();
+    input.received_at = claim;
+    REQUIRE_FALSE(unified_detail::python_response_after_claim(input, send));
+    send.claimed_at = claim;
+    REQUIRE(unified_detail::python_response_after_claim(input, send));
+    input.received_at = claim - 1ns;
+    REQUIRE_FALSE(unified_detail::python_response_after_claim(input, send));
+    input.received_at = claim + 1ns;
+    REQUIRE(unified_detail::python_response_after_claim(input, send));
+    send.claimed_order = 10;
+    input.received_at = claim;
+    input.received_order = 9;
+    REQUIRE_FALSE(unified_detail::python_response_after_claim(input, send));
+    input.received_order = 10;
+    REQUIRE_FALSE(unified_detail::python_response_after_claim(input, send));
+    input.received_order = 11;
+    REQUIRE(unified_detail::python_response_after_claim(input, send));
+    input.received_at = claim - 1ns;
+    REQUIRE(unified_detail::python_response_after_claim(input, send));
+    input.received_order = 0;
+    REQUIRE_FALSE(unified_detail::python_response_after_claim(input, send));
+    input.received_at = claim;
+    REQUIRE(unified_detail::python_response_after_claim(input, send));
+    send.claimed_order.reset();
+    input.received_order = 1;
+    REQUIRE(unified_detail::python_response_after_claim(input, send));
+    send.claimed_at.reset();
+    REQUIRE_FALSE(unified_detail::python_response_after_claim(input, send));
 }

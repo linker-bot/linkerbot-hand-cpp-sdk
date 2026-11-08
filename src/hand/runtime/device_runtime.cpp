@@ -1,5 +1,6 @@
 #include "../detail/checked_optional.hpp"
 #include "../detail/failure_kind.hpp"
+#include "../unified/detail/python_response_boundary.hpp"
 #include "../unified/detail/runtime_access.hpp"
 #include <algorithm>
 #include <cmath>
@@ -1112,8 +1113,7 @@ namespace linkerbot::hand::runtime {
             bool matched = false;
             const auto requests = pending;
             for (const auto &state : requests) {
-                if (!state->plan.consume || input.received_at >= state->deadline ||
-                    input.received_at < state->receipt->result().accepted_at) {
+                if (!state->plan.consume || input.received_at >= state->deadline) {
                     continue;
                 }
                 if (state->scoped_response_policy) {
@@ -1121,9 +1121,11 @@ namespace linkerbot::hand::runtime {
                     // Python accepts response frames from physical claim, not
                     // queue admission. A queued read must not consume an older
                     // dispatch-only write echo while another batch owns TX.
-                    if (!send.claimed_at || input.received_at < *send.claimed_at) {
+                    if (!unified_detail::python_response_after_claim(input, send)) {
                         continue;
                     }
+                } else if (input.received_at < state->receipt->result().accepted_at) {
+                    continue;
                 }
                 if (state->response || state->buffered_error) {
                     if (state->plan.defer_errors_until_send) {

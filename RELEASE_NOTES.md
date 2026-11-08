@@ -3,7 +3,7 @@
 ## 0.3.11
 
 - Under the explicit Python runtime policy, L20 speed, current-limit and fault-clear writes end at physical dispatch without retaining Native optional reply decoders or read-key reservations. Subsequent reads do not wait for an unused reply window.
-- Python-policy response matching starts at physical send claim. Replies received before a queued read is claimed cannot complete that read. Idle L20 write replies are not published as telemetry. Classic L20 replies have no transaction identifier: a same-opcode late write reply received after a read is claimed remains indistinguishable from a read response, as in the Python reference.
+- Python-policy response matching starts at physical send claim, using Session event order when available and timestamps as a compatibility fallback. Replies received before a queued read is claimed cannot complete that read. Idle L20 write replies are not published as telemetry. Classic L20 replies have no transaction identifier: a same-opcode late write reply received after a read is claimed remains indistinguishable from a read response, as in the Python reference.
 - Keep Native optional feedback, existing public C++ APIs, frame contents and inter-frame delays unchanged. No additional sender or scheduling queue is introduced.
 
 The minimum and paired transport remain v0.3.4 (`0e190032d65ed0b315337b45b3779cf4f650ed68`). Rebuild the SDK and downstream consumers to use the fix; no public structures or signatures are added in this patch.
