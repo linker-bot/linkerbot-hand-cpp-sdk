@@ -2,7 +2,15 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.10
+
+- Correct Python-policy missing-command-feedback health without changing physical dispatch outcomes or Native defaults.
+- Include the polling, logical latency and force-field health updates from the unpublished v0.3.9 tag.
+- Keep transport v0.3.4 minimum, rebuild requirements and separate hardware acceptance.
+
 ## 0.3.9
+
+Tagged but not published; superseded for publication by 0.3.10.
 
 - Align explicit Python-policy polling counters and logical transaction latency with the Python reference, including nearest-even percentiles and a bounded device-lifetime window.
 - Add force-field health projection and shared-query interval resolution; preserve Native defaults and the transport v0.3.4 minimum.

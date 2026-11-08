@@ -148,7 +148,7 @@ Public Python-policy health generations, including channel ages and recent-error
 This batch is offline preparation. It does not add O20, Python bindings, hand/arm integration or hardware acceptance. Tactile-stage angle scheduling, extended/raw identity fields, O30 field-by-field identity queries and optional automatic reconnect remain separate work.
 
 
-## Fifth compatibility batch (0.3.9)
+## Fifth compatibility batch (0.3.10)
 
 Only `RuntimeBehavior::kPython` uses the following health rules. Native counters, latency calculations and defaults are retained.
 
@@ -161,3 +161,5 @@ Global transaction latency records one successful logical operation, including a
 `PollingChannel::force_fields` is an optional field-level selector on `kForce`. For example, `{{"fn", 20ms}, {"fns", 50ms}}` requests 50 Hz and 20 Hz respectively; if both share one wire query, that query runs at 50 Hz. An empty selector preserves the existing channel form and resolves Python's default force fields `fn` and `fns`. Intervals are positive representable whole milliseconds. Invalid or duplicate field names and unsupported explicit fields are rejected before replacing the active plan. Native policy rejects a nonempty field selector. Public methods remain available, but consumers must rebuild for the appended public structure fields.
 
 Offline tests cover counter boundaries, logical success/failure, shared-device isolation, force projection and an independent Python percentile comparison over 6144 rolling-window updates. These tests do not establish hardware timing or throughput. O20, Python bindings, hand/arm integration, tactile-stage angle scheduling and remaining identity/reconnect differences remain outside this batch.
+
+Missing verified angle-command feedback preserves physical `Dispatched` status while recording one logical response timeout. It does not add successful transaction latency or advance the last successful transaction timestamp. Repeated missing feedback increments consecutive errors; a subsequent complete logical success clears that counter. This applies with or without an active polling plan. Native optional-feedback behavior is unchanged.

@@ -419,3 +419,93 @@ TEST_CASE("Python invalid field plan preserves active feedback plan without send
     REQUIRE(channel(device.hand.get_health(), "angles").feedback_policy == AngleFeedbackPolicy::kCommandFeedbackOnly);
     device.hand.stop_polling();
 }
+
+namespace {
+    template <typename Predicate> bool await_health(HandDevice &device, Predicate predicate) {
+        const auto deadline = runtime::Clock::now() + 2s;
+        do {
+            if (predicate(device.get_health())) {
+                return true;
+            }
+            std::this_thread::sleep_for(1ms);
+        } while (runtime::Clock::now() < deadline);
+        return false;
+    }
+    auto drop_angle_feedback(const linkerbot::can::Message &request) {
+        return request.data[0] == 1 && request.dlc > 1 ? std::vector<linkerbot::can::Message>{}
+                                                       : validation::l6_reply(request);
+    }
+}
+
+TEST_CASE("Python missing command feedback retains dispatch without successful latency", "[comm][python-phase5]") {
+    auto c = config();
+    c.response_timeout = 20ms;
+    validation::FakeHand device(c);
+    device.hand.start_polling({{S::kAngles, 1s, AngleFeedbackPolicy::kCommandFeedbackOnly}});
+    const auto before = device.hand.get_health();
+    device.transport->on_request(0x28, drop_angle_feedback);
+    for (uint64_t attempt = 1; attempt <= 2; ++attempt) {
+        auto command = device.hand.set_angles(std::vector<int32_t>(6, 10));
+        validation::complete(command);
+        REQUIRE(await_health(device.hand, [&](const auto &h) {
+            return channel(h, "angles").timeouts == attempt && h.consecutive_errors == attempt;
+        }));
+        const auto health = device.hand.get_health();
+        REQUIRE(health.transaction_latency.count == before.transaction_latency.count);
+        REQUIRE(health.last_successful_transaction == before.last_successful_transaction);
+        REQUIRE(test_support::require_value(health.recent_error).code == ErrorCode::kTimeout);
+        REQUIRE(channel(health, "angles").command_feedback_samples == 0);
+        REQUIRE(channel(health, "angles").feedback_samples == 0);
+        REQUIRE(command.stage() == CommandStage::kDispatched);
+        REQUIRE_FALSE(command.error());
+        REQUIRE(command.send_results().size() == 1);
+    }
+    device.transport->on_request(0x28, validation::l6_reply);
+    auto successful = device.hand.set_angles(std::vector<int32_t>(6, 11));
+    validation::complete(successful);
+    REQUIRE(await_health(device.hand, [&](const auto &h) {
+        return h.transaction_latency.count == before.transaction_latency.count + 1;
+    }));
+    const auto recovered = device.hand.get_health();
+    REQUIRE(recovered.consecutive_errors == 0);
+    REQUIRE(channel(recovered, "angles").command_feedback_samples == 1);
+    REQUIRE(successful.stage() == CommandStage::kDispatched);
+    device.hand.stop_polling();
+}
+
+TEST_CASE("Python missing command feedback records a logical error without polling", "[comm][python-phase5]") {
+    auto c = config();
+    c.response_timeout = 20ms;
+    validation::FakeHand device(c);
+    const auto before = device.hand.get_health();
+    const auto sample = test_support::require_value(device.hand.get_cached_snapshot().angles);
+    device.transport->on_request(0x28, drop_angle_feedback);
+    auto command = device.hand.set_angles(std::vector<int32_t>(6, 10));
+    validation::complete(command);
+    REQUIRE(await_health(device.hand, [](const auto &h) { return h.consecutive_errors == 1; }));
+    const auto health = device.hand.get_health();
+    REQUIRE_FALSE(health.polling_active);
+    REQUIRE(channel(health, "angles").timeouts == 0);
+    REQUIRE(health.transaction_latency.count == before.transaction_latency.count);
+    REQUIRE(health.last_successful_transaction == before.last_successful_transaction);
+    REQUIRE(test_support::require_value(device.hand.get_cached_snapshot().angles).meta.sequence ==
+            sample.meta.sequence);
+    REQUIRE(command.stage() == CommandStage::kDispatched);
+    REQUIRE_FALSE(command.error());
+}
+
+TEST_CASE("Native missing optional feedback retains its existing success accounting", "[comm][python-phase5]") {
+    validation::FakeHand device;
+    const auto before = device.hand.get_health();
+    device.transport->on_request(0x28, drop_angle_feedback);
+    auto command = device.hand.set_angles(std::vector<int32_t>(6, 10));
+    validation::complete(command);
+    REQUIRE(await_health(device.hand, [&](const auto &h) {
+        return h.transaction_latency.count == before.transaction_latency.count + 1;
+    }));
+    const auto health = device.hand.get_health();
+    REQUIRE(health.consecutive_errors == before.consecutive_errors);
+    REQUIRE_FALSE(health.recent_error);
+    REQUIRE(command.stage() == CommandStage::kDispatched);
+    REQUIRE_FALSE(command.error());
+}

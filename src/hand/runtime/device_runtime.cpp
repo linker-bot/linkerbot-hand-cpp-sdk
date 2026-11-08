@@ -1057,6 +1057,20 @@ namespace linkerbot::hand::runtime {
                                                    ::linkerbot::hand::detail::checked_value(
                                                        state->plan.optional_response_window,
                                                        "missing runtime state: state->plan.optional_response_window")) {
+                        if (state->timing) {
+                            // Missing verified feedback ends the logical transaction,
+                            // while the command retains its successful physical dispatch.
+                            state->timing->failed.store(true, std::memory_order_release);
+                            (void)record_error_locked(
+                                std::make_exception_ptr(ResponseTimeoutError(
+                                    "command feedback window expired", state->context,
+                                    state->plan.optional_response_window.value_or(std::chrono::microseconds{0}),
+                                    state->plan.late_guard)),
+                                state->context, ErrorCode::kTimeout);
+                            if (state->error_capture) {
+                                state->error_capture->store(error_revision, std::memory_order_release);
+                            }
+                        }
                         if (publication_handler && state->scoped_response_policy) {
                             publication_handler(state->plan.domain, Sample{});
                         }
