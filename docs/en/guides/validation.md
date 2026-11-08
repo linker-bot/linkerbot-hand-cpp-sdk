@@ -128,3 +128,5 @@ local; maintained build and test commands belong in CMake, the justfile and docs
 ## Python-policy health statistics
 
 `python-health-vectors` compares all 6144 updates of a 2048-sample rolling window against an independent Python rounding oracle. With `LINKERBOT_PYTHON_SDK_DIR` configured, it also checks the reference SDK's `RuntimeMetrics`. The normal test needs only Python's standard library. The reference-SDK mode additionally needs that checkout's dependencies and transport on `PYTHONPATH`. This checks percentile selection, duplicates and eviction; it is not a hardware latency benchmark.
+
+Python-policy communication regressions run in `python-policy-regressions`; `comm` runs the remaining communication cases. The groups partition the original communication selection without omissions or duplicates. Per-process acceptance budgets and individual transaction deadlines are unchanged.

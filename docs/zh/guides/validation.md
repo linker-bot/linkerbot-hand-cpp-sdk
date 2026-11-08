@@ -112,3 +112,5 @@ PR 作业执行离线测试和协议检查；main 分支还按工作流的平台
 ## Python 策略健康统计
 
 `python-health-vectors` 将 2048 样本窗口的全部 6144 次更新与独立 Python 取整算法比较。配置 `LINKERBOT_PYTHON_SDK_DIR` 后，还比较参考 SDK 的 `RuntimeMetrics`。常规测试仅依赖 Python 标准库；参考 SDK 模式需要安装该版本的依赖，并在 `PYTHONPATH` 中提供 transport。测试覆盖百分位、重复值和样本淘汰，不代表硬件延迟基准。
+
+Python 策略通信回归单独放在 `python-policy-regressions`，其余通信测试继续由 `comm` 执行。两组覆盖原通信选择集合，无遗漏、无重复。每个进程的验收预算及单事务超时均未调整。

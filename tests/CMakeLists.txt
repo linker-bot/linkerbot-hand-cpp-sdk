@@ -84,7 +84,20 @@ endif()
 
 # Hardware-in-the-loop cases live under [l6]/[o6]/[l20lite]/[l20]/[l30]/[o30] and need a real CAN interface.
 # Default ctest only runs FakeTransport integration tests.
-add_test(NAME comm COMMAND tests "[comm]" --durations yes)
+# Keep bounded per-process acceptance without combining every Python-policy
+# regression with the remaining communication suite. The filters partition [comm];
+# no case is skipped and transaction deadlines remain unchanged.
+set(python_policy_filter "")
+set(comm_filter "[comm]")
+foreach(batch RANGE 1 5)
+    if(python_policy_filter)
+        string(APPEND python_policy_filter ",")
+    endif()
+    string(APPEND python_policy_filter "[comm][python-phase${batch}]")
+    string(APPEND comm_filter "~[python-phase${batch}]")
+endforeach()
+add_test(NAME comm COMMAND tests "${comm_filter}" --durations yes)
+add_test(NAME python-policy-regressions COMMAND tests "${python_policy_filter}" --durations yes)
 # Discovery contract and adapter tests are offline: injected enumerators and
 # FakeTransport cover platform sources without opening host CAN hardware.
 add_test(NAME discovery COMMAND tests "[discovery]" --durations yes)
