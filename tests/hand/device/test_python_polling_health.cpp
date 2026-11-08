@@ -42,8 +42,8 @@ namespace {
 TEST_CASE("Python stop polling drains the claimed read after its poll observer times out", "[comm][python-phase4]") {
     auto c = python_config();
     c.shutdown_timeout = 2s;
-    validation::FakeHand d(c);
     std::promise<void> sent;
+    validation::FakeHand d(c);
     hold_angles(d, sent);
     d.hand.start_polling({{TelemetrySemantic::kAngles, 2s, AngleFeedbackPolicy::kQueryOnly}});
     REQUIRE((sent.get_future().wait_for(1s) == std::future_status::ready));
@@ -63,8 +63,8 @@ TEST_CASE("Python stop polling drains the claimed read after its poll observer t
 TEST_CASE("Python stop polling reports its bound without ending the device generation", "[comm][python-phase4]") {
     auto c = python_config();
     c.shutdown_timeout = 75ms;
-    validation::FakeHand d(c);
     std::promise<void> sent;
+    validation::FakeHand d(c);
     hold_angles(d, sent);
     const auto generation = d.hand.get_cached_snapshot().connection_generation;
     d.hand.start_polling({{TelemetrySemantic::kAngles, 2s}});
