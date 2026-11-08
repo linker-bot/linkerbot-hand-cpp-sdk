@@ -879,8 +879,8 @@ namespace linkerbot::hand::unified_detail {
         template <typename Side> [[nodiscard]] Side concrete_side(HandSide side) {
             return side == HandSide::kLeft ? Side::kLeft : Side::kRight;
         }
-        std::unique_ptr<DeviceBackend> make_model_backend(const HandDeviceConfig &config,
-                                                          const std::shared_ptr<transport::Session> &session,
+        std::unique_ptr<DeviceBackend> make_model_backend(const std::shared_ptr<transport::Session> &session,
+                                                          const HandDeviceConfig &config,
                                                           std::shared_ptr<transport::Session> owned_session) {
             const bool injected = static_cast<bool>(session);
             switch (config.model) {
@@ -943,11 +943,11 @@ namespace linkerbot::hand::unified_detail {
             throw ValidationError("HandDevice model must not be Unknown");
         }
 
-        std::unique_ptr<DeviceBackend> make_python_model_backend(const HandDeviceConfig &config,
-                                                                 const std::shared_ptr<transport::Session> &session,
+        std::unique_ptr<DeviceBackend> make_python_model_backend(const std::shared_ptr<transport::Session> &session,
+                                                                 const HandDeviceConfig &config,
                                                                  std::shared_ptr<transport::Session> owned_session) {
             const RuntimeAccess::InboxScope inbox_scope(config.route_queue_capacity.value_or(256));
-            return make_model_backend(config, session, std::move(owned_session));
+            return make_model_backend(session, config, std::move(owned_session));
         }
     } // namespace
 
@@ -982,8 +982,8 @@ namespace linkerbot::hand::unified_detail {
             RuntimeAccess::retire_closed_profiles(session);
         }
         if (config.runtime_behavior == RuntimeBehavior::kPython) {
-            return make_python_model_backend(config, session, std::move(owned_session));
+            return make_python_model_backend(session, config, std::move(owned_session));
         }
-        return make_model_backend(config, session, std::move(owned_session));
+        return make_model_backend(session, config, std::move(owned_session));
     }
 } // namespace linkerbot::hand::unified_detail
