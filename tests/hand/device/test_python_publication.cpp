@@ -442,3 +442,37 @@ TEST_CASE("Python adaptive feedback discards a redundant poll queued behind a co
                                        [](const auto &frame) { return frame.data[0] == 1 && frame.dlc == 1; });
     REQUIRE((queries == 1)); // Only the initialization baseline.
 }
+
+TEST_CASE("Python default force reads preserve firmware-unsupported errors without I/O", "[comm][python-phase3]") {
+    validation::FakeHand device(profile());
+    device.transport->on_request(0x28, [](const auto &request) {
+        if (request.data[0] == 0xB1) {
+            return std::vector<linkerbot::can::Message>{};
+        }
+        return validation::l6_reply(request);
+    });
+    REQUIRE_THROWS_AS(device.hand.get_force(1s), TimeoutError);
+    REQUIRE_THROWS_AS(device.hand.get_force(1s), TimeoutError);
+    REQUIRE_THROWS_AS(device.hand.get_force(1s), UnsupportedFirmwareError);
+    const auto sent = device.transport->sent().size();
+    REQUIRE_THROWS_AS(device.hand.get_force(1s), UnsupportedFirmwareError);
+    REQUIRE((device.transport->sent().size() == sent));
+    REQUIRE((device.hand.is_open()));
+}
+
+TEST_CASE("Python rejects a degraded polling channel before replacing an existing plan", "[comm][python-phase3]") {
+    validation::FakeHand device(profile());
+    device.transport->on_request(0x28, [](const auto &request) {
+        if (request.data[0] == 0x36) {
+            return std::vector<linkerbot::can::Message>{};
+        }
+        return validation::l6_reply(request);
+    });
+    REQUIRE_THROWS_AS(device.hand.get_currents(1s), TimeoutError);
+    REQUIRE_THROWS_AS(device.hand.get_currents(1s), TimeoutError);
+    REQUIRE_THROWS_AS(device.hand.get_currents(1s), UnsupportedFirmwareError);
+    device.hand.start_polling({{TelemetrySemantic::kAngles, 10ms, AngleFeedbackPolicy::kQueryOnly}});
+    REQUIRE_THROWS_AS(device.hand.start_polling({{TelemetrySemantic::kCurrents, 10ms}}), PollingPlanError);
+    REQUIRE((eventually([&] { return device.hand.get_cached_snapshot().angles->meta.sequence >= 2; })));
+    device.hand.stop_polling();
+}

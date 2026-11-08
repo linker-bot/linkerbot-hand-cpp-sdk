@@ -1208,6 +1208,11 @@ namespace linkerbot::hand {
             }
         }
         if (queries.empty()) {
+            if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython &&
+                std::any_of(requested.begin(), requested.end(),
+                            [&](const auto &name) { return capabilities.force_field(name).firmware_unsupported; })) {
+                throw UnsupportedFirmwareError("firmware does not support requested force fields");
+            }
             throw UnsupportedOperationError("configured hand model does not support requested force fields");
         }
         const auto physical_generation = selected.health().connection_generation;
@@ -1514,6 +1519,12 @@ namespace linkerbot::hand {
             if (!unique.insert(channel.semantic).second) {
                 throw PollingPlanError("polling semantics must be unique",
                                        {"start_polling", unified_detail::model_name(impl_->config_.model)});
+            }
+            if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython &&
+                std::find(capabilities.firmware_unsupported_telemetry.begin(),
+                          capabilities.firmware_unsupported_telemetry.end(),
+                          channel.semantic) != capabilities.firmware_unsupported_telemetry.end()) {
+                throw PollingPlanError("firmware does not support requested polling channel");
             }
             if (!capabilities.supports(channel.semantic) ||
                 (impl_->config_.l6_protocol != L6Protocol::kHopV004 &&
