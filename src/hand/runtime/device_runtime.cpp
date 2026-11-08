@@ -1057,9 +1057,9 @@ namespace linkerbot::hand::runtime {
                                                    ::linkerbot::hand::detail::checked_value(
                                                        state->plan.optional_response_window,
                                                        "missing runtime state: state->plan.optional_response_window")) {
-                        if (state->timing) {
-                            // Missing verified feedback ends the logical transaction,
-                            // while the command retains its successful physical dispatch.
+                        if (state->timing && canonical_channel(state->plan.domain) == "angles") {
+                            // Only angle feedback is a declared Python command response.
+                            // Other native optional observations do not gate logical success.
                             state->timing->failed.store(true, std::memory_order_release);
                             (void)record_error_locked(
                                 std::make_exception_ptr(ResponseTimeoutError(

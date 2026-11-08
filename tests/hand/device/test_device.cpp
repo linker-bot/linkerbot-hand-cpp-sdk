@@ -4242,3 +4242,45 @@ TEST_CASE("Python O30 force fields project one completed shared polling query", 
     device.stop_polling();
     device.close();
 }
+
+TEST_CASE("Python L20 non-angle writes do not require native optional observations", "[comm][python-phase5]") {
+    using namespace std::chrono_literals;
+    for (const auto semantic : {CommandSemantic::kSpeeds, CommandSemantic::kCurrentLimits}) {
+        CAPTURE(semantic);
+        auto config = config_for(Model::kL20);
+        config.runtime_behavior = RuntimeBehavior::kPython;
+        config.identity_timeout = 300ms;
+        config.response_timeout = 20ms;
+        FakeTransport *transport = nullptr;
+        std::shared_ptr<o30_comm::HopEndpoint> hop;
+        HandDevice device(config, [&] {
+            auto next = std::make_unique<FakeTransport>();
+            transport = next.get();
+            install_fake_device(Model::kL20, transport, hop);
+            return next;
+        });
+        device.open();
+        const auto before = device.get_health().transaction_latency.count;
+        transport->on_request(0x28, [](const Message &request) {
+            return request.dlc > 1 ? std::vector<Message>{} : classic_angle_reply(Model::kL20, request);
+        });
+        const std::vector<double> values(device.get_capabilities().joints.size(), 10);
+        auto command =
+            semantic == CommandSemantic::kSpeeds ? device.set_speeds(values) : device.set_current_limits(values);
+        completed(command);
+        // A read with the same wire key drains the optional observation before
+        // succeeding. Its success must not conceal a spurious recent timeout.
+        if (semantic == CommandSemantic::kSpeeds) {
+            REQUIRE(device.get_speeds(1s).meta.valid);
+        } else {
+            REQUIRE(device.get_currents(1s).meta.valid);
+        }
+        const auto health = device.get_health();
+        REQUIRE(health.transaction_latency.count == before + 2);
+        REQUIRE(health.consecutive_errors == 0);
+        REQUIRE_FALSE(health.recent_error);
+        REQUIRE(command.stage() == CommandStage::kDispatched);
+        REQUIRE_FALSE(command.error());
+        device.close();
+    }
+}

@@ -2,7 +2,7 @@
 
 ## 0.3.10
 
-- Treat a missing verified command response as a logical timeout under the Python policy. Preserve the command's physical `Dispatched` outcome, exclude it from successful transaction latency and retain its error count until a complete logical success. Native optional-feedback accounting is unchanged.
+- Treat missing verified angle-command feedback as a logical timeout under the Python policy. Preserve the command's physical `Dispatched` outcome, exclude it from successful transaction latency and retain its error count until a complete logical success. Native optional-feedback accounting is unchanged.
 - Project Python-policy polling counters independently of native transaction totals. Inactive plans report zero polling counters; active reads, verified angle command feedback and disabled optional queries retain their distinct accounting.
 - Measure complete logical transactions from their first transport admission through successful completion, including transport waiting and multi-stage execution. Partial stage success does not add a completed logical transaction or clear a prior logical error. Keep the latest 2048 successful durations across close, reopen and recovery, with Python nearest-even percentile selection. Native latency accounting remains unchanged.
 - Add Python-policy force-field health rows with requested, shared-query and achieved rates, query identity and observed support. Optional `PollingChannel::force_fields` entries select named fields at millisecond intervals. Shared queries use the fastest requested interval; field rows must not be summed as physical traffic. L20Lite scalar categories remain independent. Native configurations reject the new selector.
