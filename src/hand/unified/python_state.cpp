@@ -68,13 +68,15 @@ namespace linkerbot::hand::unified_detail {
             if (semantic < S::kForce || semantic > S::kForcePx || !state.enabled) {
                 continue;
             }
-            const auto found = std::find_if(resolved.queries.begin(), resolved.queries.end(),
-                                            [semantic](const auto &channel) { return channel.semantic == semantic; });
-            if (found == resolved.queries.end()) {
-                state.enabled = false;
-            } else {
-                state.channel.interval = found->interval;
+            bool needed = false;
+            for (const auto &query : resolved.queries) {
+                if (query.semantic == semantic) {
+                    state.channel.interval = query.interval;
+                    needed = true;
+                    break;
+                }
             }
+            state.enabled = needed;
         }
     }
     std::string PythonState::domain(S semantic) const {
