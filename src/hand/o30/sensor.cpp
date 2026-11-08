@@ -1,3 +1,4 @@
+#include "../unified/detail/runtime_access.hpp"
 #include "linkerbot/hand/o30/sensor_manager.hpp"
 #include <linkerbot/hand/errors.hpp>
 
@@ -216,7 +217,11 @@ namespace linkerbot::hand::o30 {
             throw UnsupportedOperationError("unified O30 tactile fields require HOP 0.0.4");
         }
         SensorData result;
-        const auto deadline = std::chrono::steady_clock::now() + timeout_ms;
+        // Python response windows pass an unbounded composite budget. Saturate
+        // its conversion instead of adding the rounded duration to a later now.
+        const auto deadline = unified_detail::RuntimeAccess::uses_response_windows(*client_->runtime())
+                                  ? runtime::deadline_after(timeout_ms)
+                                  : std::chrono::steady_clock::now() + timeout_ms;
         const auto remaining = [&]() {
             const auto value =
                 std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
