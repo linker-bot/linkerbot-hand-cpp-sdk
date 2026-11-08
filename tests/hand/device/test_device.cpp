@@ -3971,7 +3971,11 @@ TEST_CASE("unified polling accepts deployed measured-speed and voltage channels"
         CAPTURE(model);
         FakeTransport *raw = nullptr;
         std::shared_ptr<o30_comm::HopEndpoint> hop;
-        HandDevice device(config_for(model), [&] {
+        auto config = config_for(model);
+        // This test checks channel support, not the default initialization deadline.
+        // Allow the FakeTransport workers to start on loaded platform runners.
+        config.transaction_timeout = 2s;
+        HandDevice device(config, [&] {
             auto transport = std::make_unique<FakeTransport>();
             raw = transport.get();
             install_fake_telemetry(model, raw, hop);
@@ -3982,7 +3986,10 @@ TEST_CASE("unified polling accepts deployed measured-speed and voltage channels"
             }
             return transport;
         });
-        device.open();
+        {
+            INFO("initializing the offline polling fixture");
+            device.open();
+        }
         PollingPlan plan{{TelemetrySemantic::kMeasuredSpeeds, 20ms}};
         if (model == Model::kO30) {
             plan.push_back({TelemetrySemantic::kVoltages, 20ms});
