@@ -1,4 +1,6 @@
 #pragma once
+#include "python_health.hpp"
+#include "python_polling.hpp"
 #include "runtime_access.hpp"
 #include <condition_variable>
 #include <linkerbot/hand/api/device.hpp>
@@ -18,6 +20,10 @@ namespace linkerbot::hand::unified_detail {
             uint64_t sequence = 0;
         };
         explicit PythonState(const HandDeviceConfig &config);
+        void set_health(const std::shared_ptr<PythonHealthMetrics> &metrics);
+        void configure(const DeviceCapabilities &capabilities);
+        PythonHealthMetrics &health_metrics() const { return *health_; }
+        void observe_force(const ForceSample &sample);
         void publish(const std::string &domain, const runtime::Sample &sample);
         View view(bool include_feedback = true) const;
         void wait(uint64_t sequence, runtime::Deadline deadline, bool include_feedback,
@@ -59,7 +65,9 @@ namespace linkerbot::hand::unified_detail {
         bool optional(TelemetrySemantic semantic) const;
         void disable_locked(TelemetrySemantic semantic);
         void visible_locked(bool command_feedback);
+        DeviceCapabilities capabilities_locked(DeviceCapabilities value) const;
         HandDeviceConfig config_;
+        DeviceCapabilities base_capabilities_;
         std::map<std::string, TelemetrySemantic> domains_;
         mutable std::mutex mutex_;
         mutable std::condition_variable changed_;
@@ -71,6 +79,9 @@ namespace linkerbot::hand::unified_detail {
         std::map<TelemetrySemantic, unsigned> failures_;
         std::map<TelemetrySemantic, Poll> polls_;
         std::optional<PollingPlan> plan_;
+        std::map<std::string, std::chrono::milliseconds> field_intervals_;
+        std::map<std::string, bool> observed_force_;
+        std::shared_ptr<PythonHealthMetrics> health_ = std::make_shared<PythonHealthMetrics>();
         uint64_t identity_sequence_ = 0;
         uint64_t plan_sequence_ = 0;
         bool stopped_ = false;

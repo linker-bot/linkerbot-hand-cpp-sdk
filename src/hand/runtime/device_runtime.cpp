@@ -348,6 +348,7 @@ namespace linkerbot::hand::runtime {
             Deadline deadline;
             std::function<bool()> generation_valid;
             unified_detail::RuntimeAccess::ErrorCapture error_capture;
+            unified_detail::RuntimeAccess::TimingCapture timing;
         };
         thread_local std::map<const DeviceRuntime *, ResponsePolicy> response_policies;
     }
@@ -381,6 +382,7 @@ namespace linkerbot::hand::runtime {
         bool scoped_command = false;
         bool scoped_response_policy = false;
         unified_detail::RuntimeAccess::ErrorCapture error_capture;
+        unified_detail::RuntimeAccess::TimingCapture timing;
         bool response_deadline_armed = false;
         bool response_window_expiry = false;
         std::optional<Deadline> receipt_response_deadline() const {
@@ -700,7 +702,9 @@ namespace linkerbot::hand::runtime {
                 state.sample_times.pop_front();
             }
             last_successful_receive = received_at;
-            consecutive_errors = 0;
+            if (!python_endpoint_policy) {
+                consecutive_errors = 0;
+            }
             if (latency) {
                 state.latencies.push_back(*latency);
                 if (state.latencies.size() > kHealthLatencyWindowCapacity) {
@@ -860,6 +864,9 @@ namespace linkerbot::hand::runtime {
             }
             if (error) {
                 error = record_error_locked(std::move(error), state->context, ErrorCode::kProtocol);
+                if (state->timing) {
+                    state->timing->failed.store(true, std::memory_order_release);
+                }
                 if (state->error_capture) {
                     state->error_capture->store(error_revision, std::memory_order_release);
                 }
@@ -964,7 +971,9 @@ namespace linkerbot::hand::runtime {
                 }
             } else {
                 ++health.completed;
-                consecutive_errors = 0;
+                if (!state->scoped_response_policy) {
+                    consecutive_errors = 0;
+                }
                 if (completed_at) {
                     last_successful_transaction = completed_at;
                     if (state->scoped_response_policy) {
@@ -1471,6 +1480,7 @@ namespace linkerbot::hand::runtime {
         state->scoped_response_policy = response_policies.count(this) != 0;
         if (const auto policy = response_policies.find(this); policy != response_policies.end()) {
             state->error_capture = policy->second.error_capture;
+            state->timing = policy->second.timing;
         }
         state->owner = std::this_thread::get_id();
         auto &p = *impl_;
@@ -1619,6 +1629,9 @@ namespace linkerbot::hand::runtime {
                 // Admission does not perform I/O. Install the receipt while still
                 // holding runtime state so cancel cannot lose claimed-send evidence.
                 const auto submit = [&] {
+                    if (state->timing && !state->timing->started) {
+                        state->timing->started = Clock::now();
+                    }
                     return p.session->submit({state->plan.frames, state->plan.gap, state->plan.initial_delay}, options);
                 };
                 const auto execution = p.command_executions.find(state->owner);
@@ -2794,16 +2807,17 @@ void linkerbot::hand::unified_detail::RuntimeAccess::execute_command(
 
 void linkerbot::hand::unified_detail::RuntimeAccess::with_response_windows(
     runtime::DeviceRuntime &runtime, PlanTransform transform, const std::function<void()> &execute,
-    runtime::Deadline execution_deadline, std::function<bool()> generation_valid, ErrorCapture error_capture) {
+    runtime::Deadline execution_deadline, std::function<bool()> generation_valid, ErrorCapture error_capture,
+    TimingCapture timing) {
     {
         const std::lock_guard<std::mutex> lock(runtime.impl_->mutex);
         runtime.impl_->python_endpoint_policy = true;
     }
     auto previous = runtime::response_policies.extract(&runtime);
     try {
-        runtime::response_policies.emplace(&runtime, runtime::ResponsePolicy{std::move(transform), execution_deadline,
-                                                                             std::move(generation_valid),
-                                                                             std::move(error_capture)});
+        runtime::response_policies.emplace(
+            &runtime, runtime::ResponsePolicy{std::move(transform), execution_deadline, std::move(generation_valid),
+                                              std::move(error_capture), std::move(timing)});
     } catch (...) {
         if (!previous.empty()) {
             runtime::response_policies.insert(std::move(previous));
@@ -2976,5 +2990,18 @@ void linkerbot::hand::unified_detail::RuntimeAccess::initialized_health(runtime:
         device.impl_->consecutive_errors = 0;
         ++device.impl_->error_revision;
         device.impl_->last_success_error_revision = device.impl_->error_revision;
+    }
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::logical_response_completed(runtime::DeviceRuntime &device) {
+    const auto policy = runtime::response_policies.find(&device);
+    if (policy != runtime::response_policies.end() && policy->second.timing) {
+        policy->second.timing->completed = runtime::Clock::now();
+    }
+}
+void linkerbot::hand::unified_detail::RuntimeAccess::logical_transaction_succeeded(runtime::DeviceRuntime &device) {
+    const std::lock_guard<std::mutex> lock(device.impl_->mutex);
+    if (device.impl_->last_success_error_revision == device.impl_->error_revision) {
+        device.impl_->consecutive_errors = 0;
     }
 }

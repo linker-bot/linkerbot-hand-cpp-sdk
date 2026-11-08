@@ -194,6 +194,7 @@ TEST_CASE("Python identical polling plans preserve deadlines and metrics", "[com
     const PollingPlan plan{{TelemetrySemantic::kAngles, 100ms, AngleFeedbackPolicy::kAdaptive}};
     REQUIRE((state.replace(plan)));
     state.publish("angle", publication(1));
+    state.read_succeeded(TelemetrySemantic::kAngles, true);
     const auto next = state.next_poll();
     REQUIRE_FALSE(state.replace(plan));
     REQUIRE((state.next_poll() == next));

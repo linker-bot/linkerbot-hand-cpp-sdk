@@ -349,12 +349,15 @@ namespace linkerbot::hand::unified_detail {
                     while (true) {
                         auto value = reads_->read_prepared(
                             static_cast<unsigned>(semantic), deadline,
-                            [this, semantic, valid, polling](const std::shared_ptr<void> &lane) {
+                            [this, semantic, valid](const std::shared_ptr<void> &lane) {
                                 ReadValue result;
                                 auto capture = std::make_shared<std::atomic<uint64_t>>(0);
                                 const auto before = RuntimeAccess::error_revision(*device_->runtime());
                                 with_python_read_windows(
-                                    [&] { result = python_read(semantic, polling, valid, lane, capture, before); },
+                                    [&] {
+                                        result = python_read(semantic, reads_->claimed_by_poll(), valid, lane, capture,
+                                                             before);
+                                    },
                                     valid, capture);
                                 return result;
                             },
@@ -494,6 +497,16 @@ namespace linkerbot::hand::unified_detail {
                     python_->wait(sequence, deadline, include_feedback, generation_valid);
                 }
             }
+            void set_python_health(const std::shared_ptr<PythonHealthMetrics> &metrics) override {
+                if (python_) {
+                    python_->set_health(metrics);
+                }
+            }
+            void set_python_capabilities(const DeviceCapabilities &caps) override {
+                if (python_) {
+                    python_->configure(caps);
+                }
+            }
             void finish_initialization() override {
                 if (python_) {
                     RuntimeAccess::initialized_health(*device_->runtime());
@@ -589,6 +602,7 @@ namespace linkerbot::hand::unified_detail {
                     if (previous != view.samples.end()) {
                         expected = std::any_cast<DeviceIdentity>(previous->second.value);
                     }
+                    RuntimeAccess::logical_response_completed(*device_->runtime());
                     validate_connection_identity(identity, config_, expected ? &*expected : nullptr,
                                                  "refresh_device_info");
                     auto provenance = device_->runtime()->response_provenance();
@@ -812,6 +826,9 @@ namespace linkerbot::hand::unified_detail {
                             }
                         }
                     }
+                    if (const auto *force = std::get_if<ForceSample>(&result)) {
+                        python_->observe_force(*force);
+                    }
                     python_->read_succeeded(semantic, polling);
                     return result;
                 } catch (const HandError &error) {
@@ -839,7 +856,7 @@ namespace linkerbot::hand::unified_detail {
                 execute_python_transactions(
                     *device_->runtime(), config_, execute,
                     runtime::Deadline{runtime::Clock::duration{execution_deadline_.load(std::memory_order_acquire)}},
-                    valid, false, error_capture);
+                    valid, false, python_->health_metrics(), error_capture);
             }
             void with_windows(const std::function<void()> &execute, const std::function<bool()> &valid = {},
                               bool identity = false) {
@@ -852,7 +869,7 @@ namespace linkerbot::hand::unified_detail {
                 execute_python_transactions(
                     *device_->runtime(), config_, execute,
                     runtime::Deadline{runtime::Clock::duration{execution_deadline_.load(std::memory_order_acquire)}},
-                    valid, identity);
+                    valid, identity, python_->health_metrics());
             }
             HandDeviceConfig config_;
             DeviceCapabilities capabilities_;

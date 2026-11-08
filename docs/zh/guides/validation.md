@@ -13,7 +13,7 @@
 父项目已经提供 `linkerbot::comm` 时，复用父项目的目标，并检查版本。
 显式设置旧参数 `LINKERBOT_COMM_SOURCE_DIR=` 仍可在 AUTO 下通过 `CMAKE_PREFIX_PATH`
 使用安装包。配置日志会显示实际选择的依赖；切换依赖时使用独立构建目录，避免旧 CMake 缓存。
-hand 0.3.8 要求 transport 0.3.x 且不低于 0.3.4。源码、预构建及安装消费者测试均拒绝更低补丁版本和其他 minor 版本。
+hand 0.3.9 要求 transport 0.3.x 且不低于 0.3.4。源码、预构建及安装消费者测试均拒绝更低补丁版本和其他 minor 版本。
 源码开发继续使用 README 与 CI 固定的提交，并在测试报告中记录实际版本和构建配置。
 
 ### 从源码构建
@@ -107,3 +107,8 @@ PR 作业执行离线测试和协议检查；main 分支还按工作流的平台
 
 整个 `.vscode/` 目录均被忽略。机器路径和个人启动配置留在本地，项目维护的构建、
 测试命令应放在 CMake、justfile 和文档中。
+
+
+## Python 策略健康统计
+
+`python-health-vectors` 将 2048 样本窗口的全部 6144 次更新与独立 Python 取整算法比较。配置 `LINKERBOT_PYTHON_SDK_DIR` 后，还比较参考 SDK 的 `RuntimeMetrics`。常规测试仅依赖 Python 标准库；参考 SDK 模式需要安装该版本的依赖，并在 `PYTHONPATH` 中提供 transport。测试覆盖百分位、重复值和样本淘汰，不代表硬件延迟基准。

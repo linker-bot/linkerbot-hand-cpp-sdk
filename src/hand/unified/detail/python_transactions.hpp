@@ -9,9 +9,10 @@
 #include <linkerbot/hand/runtime/device_runtime.hpp>
 
 namespace linkerbot::hand::unified_detail {
+    class PythonHealthMetrics;
     void execute_python_transactions(runtime::DeviceRuntime &device, const HandDeviceConfig &config,
                                      const std::function<void()> &execute, runtime::Deadline deadline,
-                                     const std::function<bool()> &valid, bool identity,
+                                     const std::function<bool()> &valid, bool identity, PythonHealthMetrics &metrics,
                                      RuntimeAccess::ErrorCapture error_capture = {});
 
     inline const char *python_polling_domain(TelemetrySemantic semantic) {

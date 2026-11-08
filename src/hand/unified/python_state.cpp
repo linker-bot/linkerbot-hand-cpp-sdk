@@ -20,35 +20,61 @@ namespace linkerbot::hand::unified_detail {
             return std::all_of(left.begin(), left.end(), [&](const auto &entry) {
                 return std::any_of(right.begin(), right.end(), [&](const auto &other) {
                     return entry.semantic == other.semantic && entry.interval == other.interval &&
-                           entry.angle_feedback == other.angle_feedback;
+                           entry.angle_feedback == other.angle_feedback &&
+                           entry.force_fields.size() == other.force_fields.size() &&
+                           std::all_of(entry.force_fields.begin(), entry.force_fields.end(), [&](const auto &field) {
+                               return std::any_of(
+                                   other.force_fields.begin(), other.force_fields.end(), [&](const auto &value) {
+                                       return field.field == value.field && field.interval == value.interval;
+                                   });
+                           });
                 });
             });
         }
-        std::string health_name(S semantic) {
-            switch (semantic) {
-            case S::kAngles:
-                return "angles";
-            case S::kMeasuredSpeeds:
-                return "speeds";
-            case S::kCurrents:
-                return "currents";
-            case S::kTemperatures:
-                return "temperatures";
-            case S::kFaults:
-                return "faults";
-            case S::kTorques:
-                return "torques";
-            case S::kVoltages:
-                return "voltages";
-            default:
-                return python_polling_domain(semantic);
-            }
-        }
+
     }
-    PythonState::PythonState(const HandDeviceConfig &config) : config_(config) {
+    PythonState::PythonState(const HandDeviceConfig &config)
+        : config_(config), base_capabilities_(declared_capabilities(config)) {
         const auto caps = declared_capabilities(config);
         for (const auto &channel : caps.telemetry) {
             domains_.emplace(domain(channel.semantic), channel.semantic);
+        }
+    }
+    void PythonState::configure(const DeviceCapabilities &caps) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        base_capabilities_ = caps;
+    }
+    void PythonState::set_health(const std::shared_ptr<PythonHealthMetrics> &metrics) {
+        if (!metrics) {
+            throw ValidationError("Python health metrics must not be empty");
+        }
+        const std::lock_guard<std::mutex> lock(mutex_);
+        health_ = metrics;
+    }
+    void PythonState::observe_force(const ForceSample &sample) {
+        if (sample.sensors.size() != 5) {
+            return;
+        }
+        const std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto name : kForceFields) {
+            observed_force_[std::string(name)] = sample.field(name) != nullptr;
+        }
+        if (!plan_) {
+            return;
+        }
+        const auto resolved =
+            resolve_python_polling(plan_.value_or(PollingPlan{}), capabilities_locked(base_capabilities_), false);
+        for (auto &[semantic, state] : polls_) {
+            if (semantic < S::kForce || semantic > S::kForcePx || !state.enabled) {
+                continue;
+            }
+            const auto found = std::find_if(resolved.queries.begin(), resolved.queries.end(),
+                                            [semantic](const auto &channel) { return channel.semantic == semantic; });
+            if (found == resolved.queries.end()) {
+                state.enabled = false;
+            } else {
+                state.channel.interval = found->interval;
+            }
         }
     }
     std::string PythonState::domain(S semantic) const {
@@ -90,7 +116,7 @@ namespace linkerbot::hand::unified_detail {
             // Internal optional-feedback timeout notification. Keep the last
             // successful acquisition and count only the active angle policy.
             if (found != domains_.end() && found->second == S::kAngles) {
-                if (auto poll = polls_.find(S::kAngles); poll != polls_.end()) {
+                if (auto poll = polls_.find(S::kAngles); poll != polls_.end() && poll->second.enabled) {
                     ++poll->second.timeouts;
                 }
             }
@@ -127,9 +153,6 @@ namespace linkerbot::hand::unified_detail {
                         ++state.feedback;
                         state.next = std::max(state.next, runtime::Clock::now() + state.channel.interval);
                     }
-                } else if (!command && !(semantic == S::kAngles &&
-                                         state.channel.angle_feedback == AngleFeedbackPolicy::kCommandFeedbackOnly)) {
-                    ++state.feedback;
                 }
             }
         }
@@ -156,11 +179,14 @@ namespace linkerbot::hand::unified_detail {
         const std::lock_guard<std::mutex> lock(mutex_);
         current_ = {};
         non_command_ = {};
+        base_capabilities_ = declared_capabilities(config_);
         sequences_.clear();
         verified_.clear();
         failures_.clear();
         disabled_.clear();
         polls_.clear();
+        field_intervals_.clear();
+        observed_force_.clear();
         ++plan_sequence_;
         plan_.reset();
         identity_sequence_ = 0;
@@ -217,9 +243,13 @@ namespace linkerbot::hand::unified_detail {
         }
         if (auto poll = polls_.find(semantic); poll != polls_.end()) {
             ++poll->second.reads;
-            if (!polling && !(semantic == S::kAngles &&
-                              poll->second.channel.angle_feedback == AngleFeedbackPolicy::kCommandFeedbackOnly)) {
-                poll->second.next = std::max(poll->second.next, runtime::Clock::now() + poll->second.channel.interval);
+            if (!(semantic == S::kAngles &&
+                  poll->second.channel.angle_feedback == AngleFeedbackPolicy::kCommandFeedbackOnly)) {
+                ++poll->second.feedback;
+                if (!polling) {
+                    poll->second.next =
+                        std::max(poll->second.next, runtime::Clock::now() + poll->second.channel.interval);
+                }
             }
         }
     }
@@ -251,9 +281,16 @@ namespace linkerbot::hand::unified_detail {
     }
     DeviceCapabilities PythonState::capabilities(DeviceCapabilities caps) const {
         const std::lock_guard<std::mutex> lock(mutex_);
+        return capabilities_locked(std::move(caps));
+    }
+    DeviceCapabilities PythonState::capabilities_locked(DeviceCapabilities caps) const {
+        caps = python_force_capabilities(std::move(caps));
         caps.firmware_unsupported_telemetry.assign(disabled_.begin(), disabled_.end());
         auto fields = caps.force_fields();
         for (auto &field : fields) {
+            if (const auto found = observed_force_.find(std::string(field.name)); found != observed_force_.end()) {
+                field.supported = found->second;
+            }
             if (field.query_channel && disabled_.count(*field.query_channel)) {
                 field.supported = false;
                 field.firmware_unsupported = true;
@@ -264,12 +301,14 @@ namespace linkerbot::hand::unified_detail {
     }
     bool PythonState::replace(const PollingPlan &plan) {
         const std::lock_guard<std::mutex> lock(mutex_);
+        auto resolved = resolve_python_polling(plan, capabilities_locked(base_capabilities_));
         if (plan_ && same_plan(*plan_, plan)) {
             return false;
         }
+        auto retained = plan;
         std::map<S, Poll> next;
         const auto now = runtime::Clock::now();
-        for (const auto &channel : plan) {
+        for (const auto &channel : resolved.queries) {
             next.emplace(channel.semantic,
                          Poll{channel,
                               now + (channel.semantic == S::kAngles &&
@@ -278,9 +317,10 @@ namespace linkerbot::hand::unified_detail {
                                          : std::chrono::milliseconds{0}),
                               now});
         }
-        plan_ = plan;
+        plan_ = std::move(retained);
         ++plan_sequence_;
         polls_ = std::move(next);
+        field_intervals_ = std::move(resolved.fields);
         return true;
     }
     void PythonState::stop_polling() {
@@ -288,6 +328,7 @@ namespace linkerbot::hand::unified_detail {
         plan_.reset();
         ++plan_sequence_;
         polls_.clear();
+        field_intervals_.clear();
     }
     std::optional<runtime::Deadline> PythonState::next_poll() const {
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -331,31 +372,68 @@ namespace linkerbot::hand::unified_detail {
     void PythonState::project_health(HandHealth &health) const {
         const std::lock_guard<std::mutex> lock(mutex_);
         const auto now = runtime::Clock::now();
-        health.polling_active =
-            std::any_of(polls_.begin(), polls_.end(), [](const auto &item) { return item.second.enabled; });
-        for (const auto &[semantic, state] : polls_) {
-            const auto name = health_name(semantic);
-            auto found = std::find_if(health.channels.begin(), health.channels.end(),
-                                      [&](const auto &c) { return c.channel == name; });
-            if (found == health.channels.end()) {
-                health.channels.push_back({});
-                found = std::prev(health.channels.end());
-                found->channel = name;
+        const auto caps = capabilities_locked(base_capabilities_);
+        health.channels.clear();
+        health.force_fields.clear();
+        health.polling_active = !stopped_ && std::any_of(polls_.begin(), polls_.end(),
+                                                         [](const auto &item) { return item.second.enabled; });
+        for (const auto &capability : caps.telemetry) {
+            const auto semantic = capability.semantic;
+            ChannelMetrics channel;
+            channel.channel = python_health_channel(semantic);
+            channel.supported = disabled_.count(semantic) == 0;
+            if (const auto found = current_.metadata.find(semantic); found != current_.metadata.end()) {
+                auto meta = found->second;
+                if (stopped_) {
+                    meta = SampleMeta::unavailable(meta.connection_generation);
+                }
+                complete_freshness(meta, &capability, now);
+                channel.data_age = {meta.valid, meta.stale, meta.age, meta.sequence, meta.connection_generation};
             }
-            found->polling_active = state.enabled;
-            found->supported = disabled_.count(semantic) == 0;
-            found->requested_hz = state.enabled ? 1000.0 / static_cast<double>(state.channel.interval.count()) : 0;
-            const auto seconds = std::chrono::duration<double>(now - state.started).count();
-            found->achieved_hz = seconds > 0 ? static_cast<double>(state.feedback) / seconds : 0;
-            found->completed_reads = state.reads;
-            found->feedback_samples = state.feedback;
-            found->command_feedback_samples = state.commands;
-            found->missed_deadlines = state.missed;
-            found->timeouts = state.timeouts;
-            if (semantic == S::kAngles) {
-                found->feedback_policy = state.channel.angle_feedback;
+            if (!stopped_) {
+                if (const auto found = polls_.find(semantic); found != polls_.end()) {
+                    const auto &state = found->second;
+                    channel.polling_active = state.enabled;
+                    channel.requested_hz =
+                        state.enabled ? 1000.0 / static_cast<double>(state.channel.interval.count()) : 0;
+                    const auto seconds = std::chrono::duration<double>(now - state.started).count();
+                    channel.achieved_hz = seconds > 0 ? static_cast<double>(state.feedback) / seconds : 0;
+                    channel.completed_reads = state.reads;
+                    channel.feedback_samples = state.feedback;
+                    channel.command_feedback_samples = state.commands;
+                    channel.missed_deadlines = state.missed;
+                    channel.timeouts = state.timeouts;
+                    if (semantic == S::kAngles) {
+                        channel.feedback_policy = state.channel.angle_feedback;
+                    }
+                }
             }
+            health.channels.push_back(std::move(channel));
         }
+        for (const auto &field : caps.force_fields()) {
+            ForceFieldMetrics metrics;
+            metrics.field = field.name;
+            metrics.supported = field.supported;
+            metrics.query_channel = field.query_channel;
+            if (!stopped_) {
+                if (const auto found = field_intervals_.find(metrics.field); found != field_intervals_.end()) {
+                    metrics.requested_hz = 1000.0 / static_cast<double>(found->second.count());
+                }
+                if (field.query_channel) {
+                    const auto found = polls_.find(field.query_channel.value_or(S::kForce));
+                    if (found != polls_.end() && found->second.enabled) {
+                        const auto &state = found->second;
+                        metrics.query_hz = 1000.0 / static_cast<double>(state.channel.interval.count());
+                        const auto elapsed = std::chrono::duration<double>(now - state.started).count();
+                        if (elapsed > 0 && field.supported.value_or(false)) {
+                            metrics.achieved_hz = static_cast<double>(state.feedback) / elapsed;
+                        }
+                    }
+                }
+            }
+            health.force_fields.push_back(std::move(metrics));
+        }
+        health_->project(health);
     }
     void PythonState::project(HandSnapshot &snapshot, const View &view, const DeviceCapabilities &caps) const {
         snapshot.snapshot_sequence = view.sequence;

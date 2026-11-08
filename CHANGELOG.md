@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.9
+
+- Align explicit Python-policy polling counters and logical transaction latency with the Python reference, including nearest-even percentiles and a bounded device-lifetime window.
+- Add force-field health projection and shared-query interval resolution; preserve Native defaults and the transport v0.3.4 minimum.
+- Rebuild SDK and consumers. No new hardware acceptance is claimed; see [release notes](RELEASE_NOTES.md).
+
 ## 0.3.8
 
 - Correct bounded poll shutdown, logical health generations and final optional-query errors in the explicit Python policy.

@@ -1,5 +1,15 @@
 # Release notes
 
+## 0.3.9
+
+- Project Python-policy polling counters independently of native transaction totals. Inactive plans report zero polling counters; active reads, verified angle command feedback and disabled optional queries retain their distinct accounting.
+- Measure complete logical transactions from their first transport admission through successful completion, including transport waiting and multi-stage execution. Partial stage success does not add a completed logical transaction or clear a prior logical error. Keep the latest 2048 successful durations across close, reopen and recovery, with Python nearest-even percentile selection. Native latency accounting remains unchanged.
+- Add Python-policy force-field health rows with requested, shared-query and achieved rates, query identity and observed support. Optional `PollingChannel::force_fields` entries select named fields at millisecond intervals. Shared queries use the fastest requested interval; field rows must not be summed as physical traffic. L20Lite scalar categories remain independent. Native configurations reject the new selector.
+
+Existing C++ method signatures and Native defaults remain available. Public structure additions require rebuilding the SDK and downstream consumers with matching headers and libraries; binary compatibility with earlier headers is not claimed. The minimum and paired transport remain v0.3.4 (`0e190032d65ed0b315337b45b3779cf4f650ed68`).
+
+Validation covers offline lifecycle, polling, command feedback, multi-stage failure, field-query resolution, bounded latency windows, source/prebuilt/installed consumers, sanitizers, complete static analysis and the twelve-target release matrix. No new physical-device acceptance is claimed. Deployed adapters/drivers, firmware, physical timestamps, mixed CAN/FD topology and multi-device duration tests require separate hardware validation. O20, Python bindings and hand/arm integration are outside this patch. Tactile-stage angle scheduling, extended identity parity and optional automatic reconnect remain separate work.
+
 ## 0.3.8
 
 - Bound Python-policy `stop_polling()` by `shutdown_timeout`. Remove unclaimed poll demand, release poll observers and wait for already-claimed polling transactions to finish. Keep coalesced active readers and other devices running. A stop timeout leaves the device open and its polling intent disabled; recovery does not restore the stopped plan.

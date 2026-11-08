@@ -160,6 +160,10 @@ namespace linkerbot::hand::unified_detail {
             std::unique_lock<std::mutex> lock(mutex_);
             return changed_.wait_until(lock, deadline, [&] { return !active_poll_; });
         }
+        bool claimed_by_poll() {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            return active_poll_;
+        }
         size_t waiter_count() {
             const std::lock_guard<std::mutex> lock(mutex_);
             return waiters_;

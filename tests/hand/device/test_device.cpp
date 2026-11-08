@@ -4186,3 +4186,59 @@ TEST_CASE("Python O30 no-sensor downgrade is recorded after successful metadata 
     REQUIRE_FALSE(device.get_capabilities().supports(TelemetrySemantic::kForce));
     device.close();
 }
+
+TEST_CASE("Python O30 force fields project one completed shared polling query", "[comm][python-phase5]") {
+    using namespace std::chrono_literals;
+    auto config = config_for(Model::kO30);
+    config.runtime_behavior = RuntimeBehavior::kPython;
+    config.o30_layout = O30Layout::kPythonV25;
+    config.side = HandSide::kLeft;
+    config.identity_timeout = 300ms;
+    config.response_timeout = 300ms;
+    std::shared_ptr<o30_comm::HopEndpoint> hop;
+    HandDevice device(config, [&] {
+        auto t = std::make_unique<FakeTransport>();
+        hop = std::make_shared<o30_comm::HopEndpoint>();
+        hop->request_id = 2;
+        install_fake_device(Model::kO30, t.get(), hop);
+        hop->put_ascii(0x41, 0x61, 8, "0.0.4");
+        std::vector<uint8_t> metadata(0x73, 0);
+        const std::string type = "TEST", descriptor = "FnS_U16_1;Fn_U8_2";
+        std::copy(type.begin(), type.end(), metadata.begin());
+        metadata[0x20] = 'g';
+        metadata[0x29] = 1;
+        metadata[0x2A] = 2;
+        metadata[0x2B] = static_cast<uint8_t>(descriptor.size());
+        std::copy(descriptor.begin(), descriptor.end(), metadata.begin() + 0x2C);
+        metadata[0x6C] = 4;
+        metadata[0x6E] = 1;
+        metadata[0x6F] = 1;
+        metadata[0x70] = 2;
+        hop->put(0x31, metadata);
+        hop->put(0x32, {0, 1, 0, 9});
+        return t;
+    });
+    device.open();
+    const auto baseline = device.get_health().transaction_latency.count;
+    PollingChannel force{TelemetrySemantic::kForce, 1s};
+    force.force_fields = {{"fn", 1s}, {"fns", 2s}};
+    device.start_polling({force});
+    REQUIRE(wait_until([&] {
+        const auto health = device.get_health();
+        return std::any_of(health.channels.begin(), health.channels.end(),
+                           [](const auto &c) { return c.channel == "force" && c.completed_reads == 1; });
+    }));
+    const auto health = device.get_health();
+    REQUIRE(health.transaction_latency.count == baseline + 1);
+    for (const auto &field : health.force_fields) {
+        if (field.field == "fn" || field.field == "fns") {
+            REQUIRE(field.supported == true);
+            REQUIRE(field.query_channel == TelemetrySemantic::kForce);
+            REQUIRE(field.requested_hz == (field.field == "fn" ? 1.0 : 0.5));
+            REQUIRE(field.query_hz == 1.0);
+            REQUIRE(field.achieved_hz > 0);
+        }
+    }
+    device.stop_polling();
+    device.close();
+}

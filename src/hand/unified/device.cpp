@@ -9,6 +9,8 @@
 #include "detail/event_stream.hpp"
 #include "detail/force.hpp"
 #include "detail/freshness.hpp"
+#include "detail/python_health.hpp"
+#include "detail/python_polling.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -111,6 +113,9 @@ namespace linkerbot::hand {
             unified_detail::validate_config(config_);
             declared_capabilities_ = declared_capabilities(config_);
             cached_snapshot_ = unified_detail::initial_cached_snapshot(declared_capabilities_);
+            if (config_.runtime_behavior == RuntimeBehavior::kPython) {
+                python_health_ = std::make_shared<unified_detail::PythonHealthMetrics>();
+            }
             scheduler_ = std::make_unique<unified_detail::CommandScheduler>(
                 config_.command_rate_hz, config_.discrete_queue_capacity, unified_detail::CommandScheduler::Now{},
                 config_.runtime_behavior == RuntimeBehavior::kPython);
@@ -299,6 +304,10 @@ namespace linkerbot::hand {
         }
 
         [[nodiscard]] std::unique_ptr<unified_detail::DeviceBackend> create_backend() {
+            if (python_health_) {
+                return unified_detail::make_backend_with_python_health(config_, transport_factory_, shared_session_,
+                                                                       python_health_);
+            }
             return unified_detail::make_backend(config_, transport_factory_, shared_session_);
         }
 
@@ -464,6 +473,23 @@ namespace linkerbot::hand {
         void project_public_health(HandHealth &health, State state) const {
             project_health(health, state);
             if (config_.runtime_behavior == RuntimeBehavior::kPython) {
+                if (health.channels.empty()) {
+                    const auto caps = unified_detail::python_force_capabilities(
+                        python_health_capabilities_.value_or(declared_capabilities_));
+                    for (const auto &capability : caps.telemetry) {
+                        ChannelMetrics channel;
+                        channel.channel = unified_detail::python_health_channel(capability.semantic);
+                        channel.supported = std::find(caps.firmware_unsupported_telemetry.begin(),
+                                                      caps.firmware_unsupported_telemetry.end(),
+                                                      capability.semantic) == caps.firmware_unsupported_telemetry.end();
+                        health.channels.push_back(std::move(channel));
+                    }
+                    for (const auto &field : caps.force_fields()) {
+                        health.force_fields.push_back(
+                            {std::string(field.name), 0, 0, 0, field.query_channel, field.supported});
+                    }
+                }
+                python_health_->project(health);
                 health.connection_generation = cache_generation_;
                 for (auto &channel : health.channels) {
                     channel.data_age.generation = cache_generation_;
@@ -674,6 +700,8 @@ namespace linkerbot::hand {
         std::shared_future<void> lifecycle_result_;
         std::shared_mutex io_mutex_;
         std::shared_ptr<unified_detail::DeviceBackend> backend_;
+        std::shared_ptr<unified_detail::PythonHealthMetrics> python_health_;
+        std::optional<DeviceCapabilities> python_health_capabilities_;
         std::atomic<uint64_t> generation_{0};
         // Object-level constraint. Unlike identity_, this survives close(),
         // failed open() and failed recovery attempts.
@@ -754,6 +782,7 @@ namespace linkerbot::hand {
                                      {"open", unified_detail::model_name(impl_->config_.model)});
             }
             opening_generation = ++impl_->generation_;
+            impl_->python_health_capabilities_.reset();
             impl_->refresh_error_.reset();
             impl_->state_.store(Impl::State::kOpening, std::memory_order_release);
             impl_->identity_.reset();
@@ -794,6 +823,9 @@ namespace linkerbot::hand {
                 {
                     const std::lock_guard<std::mutex> lock(impl_->mutex_);
                     impl_->state_.store(Impl::State::kClosed, std::memory_order_release);
+                    if (impl_->python_health_ && impl_->cache_generation_ == 0) {
+                        impl_->python_health_->clear();
+                    }
                     impl_->open_.store(false, std::memory_order_release);
                 }
                 impl_->snapshot_cv_.notify_all();
@@ -825,6 +857,9 @@ namespace linkerbot::hand {
                 return;
             }
             impl_->invalidate_commands("close");
+            if (impl_->python_health_) {
+                impl_->python_health_capabilities_ = impl_->capabilities_unlocked();
+            }
             ++impl_->generation_;
             impl_->state_.store(Impl::State::kClosing, std::memory_order_release);
             closing = impl_->backend_;
@@ -1516,8 +1551,15 @@ namespace linkerbot::hand {
             plan.push_back({TelemetrySemantic::kAngles, impl_->config_.polling_interval});
         }
 
+        auto queries = plan;
+        if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython) {
+            queries = unified_detail::resolve_python_polling(plan, capabilities).queries;
+        } else if (std::any_of(plan.begin(), plan.end(),
+                               [](const auto &channel) { return !channel.force_fields.empty(); })) {
+            throw PollingPlanError("force field intervals require the Python policy");
+        }
         std::set<TelemetrySemantic> unique;
-        for (const auto &channel : plan) {
+        for (const auto &channel : queries) {
             if (channel.angle_feedback != AngleFeedbackPolicy::kQueryOnly &&
                 channel.angle_feedback != AngleFeedbackPolicy::kCommandFeedbackOnly &&
                 channel.angle_feedback != AngleFeedbackPolicy::kAdaptive) {

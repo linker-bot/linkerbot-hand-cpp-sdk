@@ -22,6 +22,14 @@ namespace linkerbot::hand::unified_detail {
         static void initialized_health(runtime::DeviceRuntime &);
         static size_t inbox_capacity(const runtime::DeviceRuntime &);
         using ErrorCapture = std::shared_ptr<std::atomic<uint64_t>>;
+        struct LogicalTiming {
+            std::optional<runtime::Deadline> started;
+            std::optional<runtime::Deadline> completed;
+            std::atomic<bool> failed{false};
+        };
+        using TimingCapture = std::shared_ptr<LogicalTiming>;
+        static void logical_response_completed(runtime::DeviceRuntime &);
+        static void logical_transaction_succeeded(runtime::DeviceRuntime &);
         static uint64_t error_revision(const runtime::DeviceRuntime &);
         static void promote_error(runtime::DeviceRuntime &, uint64_t revision, const HandError &error,
                                   std::optional<uint64_t> unrecorded_revision = {});
@@ -39,7 +47,8 @@ namespace linkerbot::hand::unified_detail {
         static void with_response_windows(runtime::DeviceRuntime &runtime, PlanTransform transform,
                                           const std::function<void()> &execute,
                                           runtime::Deadline execution_deadline = runtime::Deadline::max(),
-                                          std::function<bool()> generation_valid = {}, ErrorCapture error_capture = {});
+                                          std::function<bool()> generation_valid = {}, ErrorCapture error_capture = {},
+                                          TimingCapture timing = {});
         using SendObserver = std::function<void(const transport::SendResult &, bool)>;
         using Submission = std::function<transport::SendReceipt()>;
         using AdmitSend = std::function<transport::SendReceipt(const Submission &, bool)>;

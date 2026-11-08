@@ -81,6 +81,16 @@ namespace {
         device.hand.start_polling({{linkerbot::hand::TelemetrySemantic::kAngles, 20ms,
                                     linkerbot::hand::AngleFeedbackPolicy::kCommandFeedbackOnly}});
         device.hand.stop_polling();
+        const auto health = device.hand.get_health();
+        validation::require(health.transaction_latency.count > 0 && health.transaction_latency.p50.has_value(),
+                            "installed logical transaction health missing");
+        validation::require(health.force_fields.size() == 7, "installed force field health projection missing");
+        const linkerbot::hand::ForceFieldPolling selection{"fn", 100ms};
+        validation::require(selection.interval == 100ms, "installed field interval contract failed");
+        for (const auto &channel : health.channels) {
+            validation::require(channel.completed_reads == 0 && channel.feedback_samples == 0,
+                                "installed stopped polling retained counters");
+        }
     }
 
     void verify_unified_contract() {

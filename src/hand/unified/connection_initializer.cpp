@@ -92,6 +92,9 @@ namespace linkerbot::hand::unified_detail {
         const ErrorContext context{std::string(operation), model_name(config.model)};
 
         auto verified = capabilities_for_identity(identity, &config);
+        if (config.runtime_behavior == RuntimeBehavior::kPython) {
+            backend.set_python_capabilities(verified);
+        }
         if (verified.model != declared.model) {
             throw ProtocolError("verified capabilities do not match declared capabilities", context);
         }

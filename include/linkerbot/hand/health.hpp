@@ -122,6 +122,15 @@ namespace linkerbot::hand {
         LatencyMetrics execution_latency;
     };
 
+    struct ForceFieldMetrics {
+        std::string field;
+        double requested_hz = 0.0;
+        double query_hz = 0.0;
+        double achieved_hz = 0.0;
+        std::optional<TelemetrySemantic> query_channel;
+        std::optional<bool> supported;
+    };
+
     // Complete, zero-I/O snapshot for one hand connection generation. The
     // runtime returns this value by copy from mutex-protected cached state;
     // reading health never sends a frame or waits for a device response.
@@ -149,6 +158,9 @@ namespace linkerbot::hand {
         LatencyMetrics transaction_latency;
         can::TransportHealth transport;
         transport::SessionHealth session;
+        // Python policy: field intent and shared-query rates. Never sum these
+        // rows to estimate physical traffic; channel counters count queries once.
+        std::vector<ForceFieldMetrics> force_fields;
 
         [[nodiscard]] bool connected() const noexcept { return connection_state == ConnectionState::kConnected; }
 

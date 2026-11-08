@@ -12,6 +12,7 @@
 #include <linkerbot/hand/runtime/device_runtime.hpp>
 
 namespace linkerbot::hand::unified_detail {
+    class PythonHealthMetrics;
     struct CommandRequest {
         CommandSemantic semantic = CommandSemantic::kAngles;
         std::vector<double> raw_values;
@@ -55,6 +56,8 @@ namespace linkerbot::hand::unified_detail {
             (void)generation_valid;
         }
         virtual void finish_initialization() {}
+        virtual void set_python_health(const std::shared_ptr<PythonHealthMetrics> &) {}
+        virtual void set_python_capabilities(const DeviceCapabilities &) {}
 
         [[nodiscard]] virtual CommandHandle submit(const CommandRequest &request) = 0;
         [[nodiscard]] virtual TelemetrySample read(TelemetrySemantic semantic, std::chrono::milliseconds timeout) = 0;
@@ -86,4 +89,8 @@ namespace linkerbot::hand::unified_detail {
     [[nodiscard]] std::unique_ptr<DeviceBackend>
     make_backend(const HandDeviceConfig &config, const HandDevice::TransportFactory &transport_factory,
                  const std::shared_ptr<transport::Session> &shared_session);
+    std::unique_ptr<DeviceBackend> make_backend_with_python_health(const HandDeviceConfig &,
+                                                                   const HandDevice::TransportFactory &,
+                                                                   const std::shared_ptr<transport::Session> &,
+                                                                   const std::shared_ptr<PythonHealthMetrics> &);
 } // namespace linkerbot::hand::unified_detail
