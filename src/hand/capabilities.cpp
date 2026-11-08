@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <linkerbot/hand/capabilities.hpp>
 
 #include <cmath>
@@ -53,7 +54,9 @@ namespace linkerbot::hand {
     bool DeviceCapabilities::supports(CommandSemantic semantic) const noexcept { return command(semantic) != nullptr; }
 
     bool DeviceCapabilities::supports(TelemetrySemantic semantic) const noexcept {
-        return telemetry_channel(semantic) != nullptr;
+        return telemetry_channel(semantic) != nullptr &&
+               std::find(firmware_unsupported_telemetry.begin(), firmware_unsupported_telemetry.end(), semantic) ==
+                   firmware_unsupported_telemetry.end();
     }
 
     bool OperationCapabilities::supports(DeviceOperation operation) const noexcept {
@@ -228,6 +231,15 @@ namespace linkerbot::hand {
             if (telemetry_capability.minimum_period_ms.has_value() &&
                 telemetry_capability.recommended_period_ms.has_value() &&
                 *telemetry_capability.recommended_period_ms < *telemetry_capability.minimum_period_ms) {
+                return false;
+            }
+        }
+        for (size_t i = 0; i < firmware_unsupported_telemetry.size(); ++i) {
+            if (!telemetry_channel(firmware_unsupported_telemetry[i]) ||
+                std::find(firmware_unsupported_telemetry.begin(),
+                          firmware_unsupported_telemetry.begin() + static_cast<std::ptrdiff_t>(i),
+                          firmware_unsupported_telemetry[i]) !=
+                    firmware_unsupported_telemetry.begin() + static_cast<std::ptrdiff_t>(i)) {
                 return false;
             }
         }
@@ -408,6 +420,9 @@ namespace linkerbot::hand {
             } else {
                 out << "null";
             }
+            if (field.firmware_unsupported) {
+                out << ",\"firmware_unsupported\":true";
+            }
             out << ",\"query_channel\":";
             if (field.query_channel) {
                 out << static_cast<unsigned>(*field.query_channel);
@@ -420,7 +435,18 @@ namespace linkerbot::hand {
             append_strings(out, field.sensor_names);
             out << '}';
         }
-        out << "],\"operations\":{"
+        out << "]";
+        if (!capabilities.firmware_unsupported_telemetry.empty()) {
+            out << ",\"firmware_unsupported_telemetry\":[";
+            for (size_t i = 0; i < capabilities.firmware_unsupported_telemetry.size(); ++i) {
+                if (i) {
+                    out << ',';
+                }
+                out << static_cast<unsigned>(capabilities.firmware_unsupported_telemetry[i]);
+            }
+            out << ']';
+        }
+        out << ",\"operations\":{"
             << "\"read_device_info\":" << (capabilities.operations.read_device_info ? "true" : "false")
             << ",\"clear_faults\":" << (capabilities.operations.clear_faults ? "true" : "false")
             << ",\"enable\":" << (capabilities.operations.enable ? "true" : "false")

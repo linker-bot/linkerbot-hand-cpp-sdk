@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.7
+
+- Add publication-based channel sequences, identity sample metadata, filtered retained-cache waits, firmware-optional query degradation and unified angle feedback policies to the explicit Python runtime policy.
+- Correct matching tactile response validation and force aggregation; add independent L20Lite scalar queries in that policy.
+- Preserve native defaults and the transport v0.3.4 minimum. Rebuild SDK and consumers. Hardware acceptance remains separate; see [release notes](RELEASE_NOTES.md).
+
 ## 0.3.6
 
 - Add an opt-in Python runtime policy for coalesced reads, response-stage windows, strict matching responses, close terminal outcomes and bounded explicit recovery.

@@ -118,6 +118,7 @@ namespace linkerbot::hand::unified_detail {
             }
         }
 
+        backend.finish_initialization();
         return {std::move(identity), std::move(verified)};
     }
 } // namespace linkerbot::hand::unified_detail

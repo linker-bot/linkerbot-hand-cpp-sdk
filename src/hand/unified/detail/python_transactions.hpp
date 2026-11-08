@@ -1,6 +1,7 @@
 #pragma once
 #include "classic_response.hpp"
 #include "python_l30.hpp"
+#include "python_tactile.hpp"
 #include <algorithm>
 #include <array>
 #include <linkerbot/hand/api/config.hpp>
@@ -59,8 +60,8 @@ namespace linkerbot::hand::unified_detail {
         auto guard = 5ms;
         const bool six = config.model == Model::kL6 || config.model == Model::kO6;
         const bool identity = plan.domain.find("version") != std::string::npos;
-        const bool tactile =
-            plan.domain.find("force") != std::string::npos || (config.model == Model::kL30 && python_l30_tactile(plan));
+        const bool tactile = (plan.domain.find("force") != std::string::npos && plan.domain.rfind("python/", 0) != 0) ||
+                             (config.model == Model::kL30 && python_l30_tactile(plan));
         if (six && !identity && !tactile) {
             window = 50ms;
         }
@@ -151,6 +152,9 @@ namespace linkerbot::hand::unified_detail {
         }
         if (config.model == Model::kL30) {
             plan = python_l30_response(std::move(plan));
+        }
+        if (tactile) {
+            plan = python_tactile(std::move(plan), config.model);
         }
         plan.response_window = config.response_timeout.value_or(window);
         if (plan.optional_response_window) {

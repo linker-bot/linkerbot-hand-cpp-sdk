@@ -126,6 +126,57 @@ namespace linkerbot::hand::unified_detail {
                                         target.unsupported_fields.end());
     }
 
+    void merge_python_force_samples(ForceSample &target, const ForceSample &source) {
+        if (target.fields.empty()) {
+            target = source;
+            return;
+        }
+        if (!target.meta.collected_at ||
+            (source.meta.collected_at && *source.meta.collected_at > *target.meta.collected_at)) {
+            target.meta = source.meta;
+        }
+        if (!source.tactile.empty() || !source.sensors.empty() || (target.tactile.empty() && target.sensors.empty())) {
+            target.raw = source.raw;
+            target.shape = source.shape;
+            target.tactile = source.tactile;
+            target.sensors = source.sensors;
+        }
+        std::vector<TelemetrySemantic> queries;
+        for (const auto &field : source.fields) {
+            queries.push_back(field.query_channel);
+        }
+        // Descriptor responses can stop exposing a previously present quantity.
+        // All descriptor fields belong to the same physical force query.
+        if (!source.sensors.empty() || !source.tactile.empty()) {
+            queries.push_back(TelemetrySemantic::kForce);
+        }
+        target.fields.erase(std::remove_if(target.fields.begin(), target.fields.end(),
+                                           [&](const auto &field) {
+                                               return std::find(queries.begin(), queries.end(), field.query_channel) !=
+                                                      queries.end();
+                                           }),
+                            target.fields.end());
+        for (const auto &field : source.fields) {
+            auto found = std::find_if(target.fields.begin(), target.fields.end(),
+                                      [&](const auto &old) { return old.name == field.name; });
+            if (found == target.fields.end()) {
+                target.fields.push_back(field);
+            } else {
+                *found = field;
+            }
+        }
+        for (const auto &name : source.unsupported_fields) {
+            if (std::find(target.unsupported_fields.begin(), target.unsupported_fields.end(), name) ==
+                target.unsupported_fields.end()) {
+                target.unsupported_fields.push_back(name);
+            }
+        }
+        target.unsupported_fields.erase(std::remove_if(target.unsupported_fields.begin(),
+                                                       target.unsupported_fields.end(),
+                                                       [&](const auto &name) { return target.field(name); }),
+                                        target.unsupported_fields.end());
+    }
+
     ForceSample tip_force_sample(const l20lite::TipForceData &data, SampleMeta meta,
                                  const DeviceCapabilities &capabilities) {
         ForceSample result;

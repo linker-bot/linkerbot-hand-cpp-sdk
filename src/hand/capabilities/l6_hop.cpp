@@ -52,6 +52,25 @@ namespace linkerbot::hand {
                     }
                 }
             }
+            if (config.model == Model::kL20Lite && config.runtime_behavior == RuntimeBehavior::kPython) {
+                auto fields = result.force_fields();
+                for (auto &field : fields) {
+                    if (field.name == "fns") {
+                        field.query_channel = TelemetrySemantic::kForceFns;
+                    }
+                    if (field.name == "fts") {
+                        field.query_channel = TelemetrySemantic::kForceFts;
+                    }
+                    if (field.name == "fds") {
+                        field.query_channel = TelemetrySemantic::kForceFds;
+                    }
+                    if (field.name == "px") {
+                        field.query_channel = TelemetrySemantic::kForcePx;
+                    }
+                    field.shared_fields = {field.name};
+                }
+                result.observed_force_fields = std::move(fields);
+            }
             return result;
         }
         if (config.model != Model::kL6 || config.l6_protocol != L6Protocol::kHopV004) {

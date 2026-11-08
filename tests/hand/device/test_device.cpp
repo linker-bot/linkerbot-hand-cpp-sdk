@@ -4030,3 +4030,116 @@ TEST_CASE("Python runtime initializes reads and recovers each Classic and L30 mo
         REQUIRE_FALSE(device.is_open());
     }
 }
+
+TEST_CASE("Python published metadata is stable across Classic and L30 models", "[comm][python-phase3]") {
+    using namespace std::chrono_literals;
+    for (const auto model : {Model::kL6, Model::kO6, Model::kL20Lite, Model::kL20, Model::kL30}) {
+        CAPTURE(model);
+        auto config = config_for(model);
+        config.runtime_behavior = RuntimeBehavior::kPython;
+        config.response_timeout = 200ms;
+        std::shared_ptr<o30_comm::HopEndpoint> hop;
+        HandDevice device(config, [&] {
+            auto transport = std::make_unique<FakeTransport>();
+            install_fake_device(model, transport.get(), hop);
+            return transport;
+        });
+        device.open();
+        const auto initial = device.get_cached_snapshot();
+        REQUIRE((initial.angles->meta.sequence == 1));
+        REQUIRE((initial.faults->meta.sequence == 1));
+        (void)device.get_angles(2s);
+        (void)device.get_angles(2s);
+        const auto updated = device.get_cached_snapshot();
+        REQUIRE((updated.angles->meta.sequence == 3));
+        REQUIRE((updated.faults->meta.sequence == 1));
+        REQUIRE((updated.device_info->meta.sequence == 1));
+        REQUIRE((updated.device_info->meta.valid));
+        device.close();
+        device.open();
+        const auto reopened = device.get_cached_snapshot();
+        REQUIRE((reopened.connection_generation == 2));
+        REQUIRE((reopened.angles->meta.sequence == 1));
+        REQUIRE((reopened.angles->meta.connection_generation == 2));
+        REQUIRE((reopened.device_info->meta.connection_generation == 2));
+        REQUIRE((device.get_identity()->meta.connection_generation == 2));
+        REQUIRE((device.get_angles(2s).meta.connection_generation == 2));
+        device.close();
+    }
+}
+
+TEST_CASE("Python L20Lite scalar queries retain independent data and degradation", "[comm][python-phase3]") {
+    using namespace std::chrono_literals;
+    auto config = config_for(Model::kL20Lite);
+    config.runtime_behavior = RuntimeBehavior::kPython;
+    config.response_timeout = 30ms;
+    FakeTransport *transport = nullptr;
+    std::shared_ptr<o30_comm::HopEndpoint> hop;
+    HandDevice device(config, [&] {
+        auto next = std::make_unique<FakeTransport>();
+        transport = next.get();
+        install_fake_device(Model::kL20Lite, transport, hop);
+        return next;
+    });
+    device.open();
+    const auto count = transport->sent().size();
+    const auto normal = device.get_force({"fns"}, 1s);
+    REQUIRE((transport->sent().size() == count + 1));
+    REQUIRE((transport->sent().back().data[0] == 0x20));
+    REQUIRE((normal.field("fns") != nullptr));
+    REQUIRE((normal.field("fts") == nullptr));
+    const auto sequence = normal.field("fns")->meta.sequence;
+    const auto tangential = device.get_force({"fts"}, 1s);
+    REQUIRE((transport->sent().back().data[0] == 0x21));
+    REQUIRE((tangential.field("fns") == nullptr));
+    const auto cached = device.get_cached_snapshot();
+    REQUIRE((cached.force->field("fns")->meta.sequence == sequence));
+    REQUIRE((cached.force->field("fts")->meta.sequence == 1));
+    transport->on_request(0x28, [](const Message &request) {
+        if (request.data[0] == 0x23) {
+            return std::vector<Message>{};
+        }
+        return classic_angle_reply(Model::kL20Lite, request);
+    });
+    REQUIRE_THROWS_AS(device.get_force({"px"}, 1s), TimeoutError);
+    REQUIRE_THROWS_AS(device.get_force({"px"}, 1s), TimeoutError);
+    REQUIRE_THROWS_AS(device.get_force({"px"}, 1s), UnsupportedFirmwareError);
+    REQUIRE((device.get_capabilities().force_field("px").firmware_unsupported));
+    REQUIRE((device.get_capabilities().force_field("fns").supported == true));
+    REQUIRE((device.get_force({"fns"}, 1s).field("fns")->meta.sequence > sequence));
+    REQUIRE((device.get_cached_snapshot().force->status("px") == "unsupported"));
+    device.close();
+}
+
+TEST_CASE("Python optional polling degradation preserves other poll channels and resets on recovery",
+          "[comm][python-phase3]") {
+    using namespace std::chrono_literals;
+    auto config = config_for(Model::kL6);
+    config.runtime_behavior = RuntimeBehavior::kPython;
+    config.response_timeout = 20ms;
+    FakeTransport *transport = nullptr;
+    std::shared_ptr<o30_comm::HopEndpoint> hop;
+    HandDevice device(config, [&] {
+        auto next = std::make_unique<FakeTransport>();
+        transport = next.get();
+        install_fake_device(Model::kL6, transport, hop);
+        return next;
+    });
+    device.open();
+    transport->on_request(0x28, [](const Message &request) {
+        if (request.data[0] == 0x36) {
+            return std::vector<Message>{};
+        }
+        return classic_angle_reply(Model::kL6, request);
+    });
+    device.start_polling({{TelemetrySemantic::kCurrents, 10ms}, {TelemetrySemantic::kAngles, 10ms}});
+    REQUIRE((wait_until([&] { return !device.get_capabilities().supports(TelemetrySemantic::kCurrents); })));
+    REQUIRE((device.get_health().connected()));
+    const auto before = device.get_cached_snapshot().angles->meta.sequence;
+    REQUIRE((wait_until([&] { return device.get_cached_snapshot().angles->meta.sequence > before; })));
+    device.stop_polling();
+    device.recover_for(2s);
+    REQUIRE((device.get_capabilities().supports(TelemetrySemantic::kCurrents)));
+    REQUIRE((device.get_currents(1s).meta.valid));
+    device.close();
+}

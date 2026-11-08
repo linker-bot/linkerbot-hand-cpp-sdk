@@ -11,6 +11,8 @@ namespace linkerbot::hand {
     struct PollingChannel {
         TelemetrySemantic semantic = TelemetrySemantic::kAngles;
         std::chrono::milliseconds interval{100};
+        // Used for angles by the explicit Python runtime policy only.
+        AngleFeedbackPolicy angle_feedback = AngleFeedbackPolicy::kAdaptive;
     };
 
     using PollingPlan = std::vector<PollingChannel>;

@@ -64,7 +64,7 @@ Still required before replacing the accepted Python implementation:
 - A pinned business configuration and same-input cross-language acceptance
   corpus for every deployed model, unit/range boundary and fault response.
 - Deployed-configuration acceptance for the opt-in transaction policy below,
-  plus adaptive feedback and automatic reconnect parity. Native defaults remain
+  plus automatic reconnect parity and the remaining deployment-specific behavior corpus. Native defaults remain
   separate from the Python policy; passing offline cases is not complete parity.
 - A Python binding proving receipt retention on allocation/wrapping failure,
   GIL/callback/destructor/interpreter-exit safety, exception conversion and
@@ -121,3 +121,18 @@ runtime.recovery_attempts = 3;
 runtime.recovery_timeout = 5s;
 runtime.recovery_quiet = 200ms;
 ```
+
+
+## Third compatibility patch (0.3.7)
+
+The following additions apply to the explicit Python runtime policy; native defaults remain unchanged.
+
+- Complete telemetry publications advance their own channel sequence even when no caller reads a snapshot. A coherent publication view supplies sample sequence, generation, receive time and response/report/command delivery metadata. Global snapshot revisions also include identity and observed capability changes. Repeated cache reads do not create acquisitions.
+- `DeviceIdentity::meta` carries its own identity-read sequence and monotonic collection metadata. A successful `refresh_device_info()` advances identity without advancing telemetry channels. Retained caches preserve identity evidence with unavailable metadata after generation loss. This does not add the remaining Python raw/version detail fields.
+- `wait_for_cached_snapshot(previous, timeout, wake_on_command_feedback = true)` reads retained state and performs no device I/O. Filtering suppresses command-only wakeups, not cache retention. A non-command update returns its coherent revision, including command data that preceded that revision. Timeout returns the current cache; close or recovery releases old-generation waiters. The original wait signature remains unambiguous; native wait behavior is retained.
+- Matching Classic tactile rows validate length and compact/nibble row indices before assembly. Conflicting repeats fail the transaction without replacing the previous complete sample. Complete identical duplicates do not fabricate a new acquisition. Unrelated routes/types/opcodes stay unmatched.
+- Force aggregation replaces all fields belonging to the completed query while retaining other queries and their original collection metadata. Scalar-only aggregate raw data follows the latest scalar query. L20Lite Python-policy scalar getters issue only their selected category query (0x20..0x23); the native aggregate query remains available on the native path.
+- Firmware-optional observations belong to one device generation. Only a physically sent optional query that has not succeeded in that generation can degrade. Three timeout/protocol failures disable that query; an explicit unsupported response can disable it immediately. Transport failure and expired unsent callers do not establish unsupported firmware. Capability queries, force status and polling reflect the observation; other channels remain usable. Explicit recovery clears those observations. Required initialization remains required.
+- `PollingChannel::angle_feedback` selects `kQueryOnly`, `kCommandFeedbackOnly` or `kAdaptive`; the Python-policy default is adaptive. Command-only mode requires a declared verified current-state response and never repeats motion targets. Query-only mode does not use command feedback to postpone queries. Adaptive mode postpones only redundant angle queries after verified feedback. Feedback, completed-read, timeout and missed-deadline metrics remain distinct. Reapplying an equivalent plan preserves deadlines and metrics. All physical frames still pass through the existing Session.
+
+Python bindings must map retained snapshot and filtered wait APIs explicitly. GIL, callback, destructor/interpreter-exit and allocation-failure proof, wall-clock conversion and shared hand/arm channel integration are not provided by this native patch. Hardware acceptance remains separate. O20 and automatic reconnect are not included.

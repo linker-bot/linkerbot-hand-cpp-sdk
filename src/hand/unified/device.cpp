@@ -157,7 +157,7 @@ namespace linkerbot::hand {
 
         void close_backend();
         void recover_backend(runtime::Deadline preparation_deadline = runtime::Deadline::max());
-        [[nodiscard]] HandSnapshot snapshot();
+        [[nodiscard]] HandSnapshot snapshot(bool include_feedback = true);
 
         void retain_snapshot() noexcept {
             try {
@@ -174,7 +174,8 @@ namespace linkerbot::hand {
 
         void invalidate_cache_locked() {
             if (cache_valid_) {
-                unified_detail::invalidate_cached_snapshot(cached_snapshot_);
+                unified_detail::invalidate_cached_snapshot(cached_snapshot_,
+                                                           config_.runtime_behavior == RuntimeBehavior::kPython);
                 cached_snapshot_.captured_at = std::chrono::steady_clock::now();
                 cached_snapshot_.snapshot_sequence = ++cache_revision_;
                 cache_valid_ = false;
@@ -383,9 +384,9 @@ namespace linkerbot::hand {
             }
         }
 
-        [[nodiscard]] const DeviceCapabilities &capabilities_unlocked() const {
+        [[nodiscard]] DeviceCapabilities capabilities_unlocked() const {
             if (state_.load(std::memory_order_acquire) == State::kReady && verified_capabilities_) {
-                return *verified_capabilities_;
+                return backend_ ? backend_->observed_capabilities(*verified_capabilities_) : *verified_capabilities_;
             }
             return declared_capabilities_;
         }
@@ -550,6 +551,11 @@ namespace linkerbot::hand {
         read_raw(TelemetrySemantic semantic, std::chrono::milliseconds timeout, const char *operation) {
             const auto context = capture(operation);
             const auto &capabilities = context.capabilities;
+            if (std::find(capabilities.firmware_unsupported_telemetry.begin(),
+                          capabilities.firmware_unsupported_telemetry.end(),
+                          semantic) != capabilities.firmware_unsupported_telemetry.end()) {
+                throw UnsupportedFirmwareError("optional telemetry is disabled for this generation");
+            }
             if (!capabilities.supports(semantic)) {
                 throw UnsupportedOperationError(std::string("configured hand model does not support ") + operation,
                                                 {operation, unified_detail::model_name(config_.model)});
@@ -560,8 +566,13 @@ namespace linkerbot::hand {
             }
             auto lease = begin_io(context, operation);
             auto sample = complete_io(context, operation, [&] { return context.backend->read(semantic, timeout); });
-            const auto generation = context.backend->health().connection_generation;
+            auto generation = context.backend->health().connection_generation;
             finish_io(context, operation);
+            if (config_.runtime_behavior == RuntimeBehavior::kPython) {
+                const std::lock_guard<std::mutex> lock(mutex_);
+                check_context(context, operation);
+                generation = cache_generation_;
+            }
             std::visit([generation](auto &value) { value.meta.connection_generation = generation; }, sample);
             return sample;
         }
@@ -755,6 +766,9 @@ namespace linkerbot::hand {
             impl_->verified_capabilities_ = std::move(initialized.capabilities);
             // Advance the readable generation only after initialization state is installed.
             ++impl_->cache_generation_;
+            if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython && impl_->identity_) {
+                impl_->identity_->meta.connection_generation = impl_->cache_generation_;
+            }
             impl_->cache_physical_generation_ = physical_generation;
             impl_->cached_source_sequence_.reset();
             impl_->state_.store(Impl::State::kReady, std::memory_order_release);
@@ -969,6 +983,9 @@ namespace linkerbot::hand {
                 "refresh_device_info");
             // Identity refresh leaves this generation's capability observations
             // and polling decisions intact, matching the Python read path.
+            if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython) {
+                identity.meta.connection_generation = impl_->cache_generation_;
+            }
             impl_->identity_ = identity;
             impl_->cached_source_sequence_.reset();
             return identity;
@@ -1034,7 +1051,8 @@ namespace linkerbot::hand {
         if (impl_->state_.load(std::memory_order_acquire) != Impl::State::kReady) {
             return std::nullopt;
         }
-        return impl_->verified_capabilities_;
+        return impl_->verified_capabilities_ ? std::optional<DeviceCapabilities>{impl_->capabilities_unlocked()}
+                                             : std::nullopt;
     }
 
     CommandHandle HandDevice::set_angles(const std::vector<int32_t> &values) {
@@ -1172,6 +1190,9 @@ namespace linkerbot::hand {
         for (const auto &name : requested) {
             const auto field = capabilities.force_field(name);
             if (field.supported == false) {
+                if (!fields.empty() && field.firmware_unsupported) {
+                    throw UnsupportedFirmwareError("firmware does not support requested force field " + name);
+                }
                 if (!fields.empty()) {
                     throw UnsupportedOperationError("configured hand model does not support force field " + name);
                 }
@@ -1185,7 +1206,13 @@ namespace linkerbot::hand {
         if (queries.empty()) {
             throw UnsupportedOperationError("configured hand model does not support requested force fields");
         }
-        const auto generation = selected.health().connection_generation;
+        const auto physical_generation = selected.health().connection_generation;
+        auto generation = physical_generation;
+        if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython) {
+            const std::lock_guard<std::mutex> lock(impl_->mutex_);
+            impl_->check_context(context, "get_force");
+            generation = impl_->cache_generation_;
+        }
         ForceSample result;
         for (const auto query : queries) {
             const auto remaining =
@@ -1202,9 +1229,13 @@ namespace linkerbot::hand {
                 sample.meta.sequence = ++impl_->snapshot_sequence_;
             }
             unified_detail::complete_force_meta(sample, generation, capabilities);
-            unified_detail::merge_force_samples(result, sample);
+            if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython) {
+                unified_detail::merge_python_force_samples(result, sample);
+            } else {
+                unified_detail::merge_force_samples(result, sample);
+            }
         }
-        if (selected.health().connection_generation != generation) {
+        if (selected.health().connection_generation != physical_generation) {
             throw DeviceNotReadyError("force queries crossed a connection generation");
         }
         {
@@ -1231,10 +1262,13 @@ namespace linkerbot::hand {
 
     HandSnapshot HandDevice::get_snapshot() const { return impl_->snapshot(); }
 
-    HandSnapshot HandDevice::Impl::snapshot() {
+    HandSnapshot HandDevice::Impl::snapshot(bool include_feedback) {
         const auto context = capture("get_snapshot");
         const auto &capabilities = context.capabilities;
-        auto result = context.backend->snapshot(capabilities.model, capabilities.side, capabilities);
+        auto result = config_.runtime_behavior == RuntimeBehavior::kPython
+                          ? context.backend->filtered_snapshot(capabilities.model, capabilities.side, capabilities,
+                                                               include_feedback)
+                          : context.backend->snapshot(capabilities.model, capabilities.side, capabilities);
         const auto health = context.backend->health();
         const auto generation = health.connection_generation;
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -1273,9 +1307,15 @@ namespace linkerbot::hand {
             last_snapshot_time_ = latest_sample;
             snapshot_cv_.notify_all();
         }
-        result.snapshot_sequence = snapshot_sequence_;
-        result.connection_generation = generation;
-        result.device_info = identity_;
+        if (config_.runtime_behavior != RuntimeBehavior::kPython) {
+            result.snapshot_sequence = snapshot_sequence_;
+            result.device_info = identity_;
+        }
+        result.connection_generation =
+            config_.runtime_behavior == RuntimeBehavior::kPython ? cache_generation_ : generation;
+        if (result.device_info && config_.runtime_behavior == RuntimeBehavior::kPython) {
+            result.device_info->meta.connection_generation = result.connection_generation;
+        }
 
         const auto now = std::chrono::steady_clock::now();
         const auto complete_meta = [&](auto &sample, TelemetrySemantic semantic) {
@@ -1283,7 +1323,7 @@ namespace linkerbot::hand {
                 return;
             }
             auto &meta = sample->meta;
-            if (meta.sequence == 0) {
+            if (meta.sequence == 0 && config_.runtime_behavior != RuntimeBehavior::kPython) {
                 meta.sequence = result.snapshot_sequence;
             }
             meta.connection_generation = result.connection_generation;
@@ -1327,8 +1367,11 @@ namespace linkerbot::hand {
         if (!cache_valid_ || cached_source_sequence_ != result.snapshot_sequence) {
             ++cache_revision_;
         }
-        retained.snapshot_sequence = cache_revision_;
-        cached_snapshot_ = std::move(retained);
+        retained.snapshot_sequence =
+            config_.runtime_behavior == RuntimeBehavior::kPython ? result.snapshot_sequence : cache_revision_;
+        if (include_feedback) {
+            cached_snapshot_ = std::move(retained);
+        }
         cached_source_sequence_ = result.snapshot_sequence;
         cache_valid_ = true;
         return result;
@@ -1360,6 +1403,9 @@ namespace linkerbot::hand {
                                   {"wait_for_snapshot", unified_detail::model_name(impl_->config_.model)});
         }
 
+        if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython) {
+            return wait_for_cached_snapshot(previous, timeout, true);
+        }
         const auto changed = [&previous](const HandSnapshot &current) {
             return current.connection_generation != previous.connection_generation ||
                    current.snapshot_sequence != previous.snapshot_sequence;
@@ -1378,6 +1424,49 @@ namespace linkerbot::hand {
             current = get_snapshot();
         }
         return current;
+    }
+
+    HandSnapshot HandDevice::wait_for_cached_snapshot(const HandSnapshot &previous, std::chrono::milliseconds timeout,
+                                                      bool wake_on_command_feedback) const {
+        if (timeout.count() <= 0) {
+            throw ValidationError("snapshot wait timeout must be positive");
+        }
+        if (impl_->config_.runtime_behavior != RuntimeBehavior::kPython) {
+            if (!wake_on_command_feedback) {
+                throw UnsupportedOperationError("filtered waits require the Python runtime policy");
+            }
+            return wait_for_snapshot(previous, timeout);
+        }
+        const auto deadline = runtime::deadline_after(timeout);
+        const auto changed = [&previous, wake_on_command_feedback](const HandSnapshot &value) {
+            return value.connection_generation != previous.connection_generation ||
+                   (wake_on_command_feedback ? value.snapshot_sequence != previous.snapshot_sequence
+                                             : value.snapshot_sequence > previous.snapshot_sequence);
+        };
+        auto current = get_cached_snapshot();
+        if (!impl_->open_.load(std::memory_order_acquire)) {
+            return current;
+        }
+        try {
+            const auto context = impl_->capture("wait_for_snapshot");
+            current = impl_->snapshot(wake_on_command_feedback);
+            if (changed(current)) {
+                return current;
+            }
+            context.backend->wait_publication(previous.snapshot_sequence, deadline, wake_on_command_feedback,
+                                              [owner = impl_, epoch = context.generation] {
+                                                  return owner->generation_.load(std::memory_order_acquire) == epoch &&
+                                                         owner->open_.load(std::memory_order_acquire);
+                                              });
+            if (!impl_->open_.load(std::memory_order_acquire)) {
+                return get_cached_snapshot();
+            }
+            current = impl_->snapshot(wake_on_command_feedback);
+            // A timeout returns the latest cache, including retained command feedback.
+            return changed(current) ? current : get_cached_snapshot();
+        } catch (const DeviceNotReadyError &) {
+            return get_cached_snapshot();
+        }
     }
 
     void HandDevice::start_polling() {
@@ -1401,6 +1490,19 @@ namespace linkerbot::hand {
 
         std::set<TelemetrySemantic> unique;
         for (const auto &channel : plan) {
+            if (channel.angle_feedback != AngleFeedbackPolicy::kQueryOnly &&
+                channel.angle_feedback != AngleFeedbackPolicy::kCommandFeedbackOnly &&
+                channel.angle_feedback != AngleFeedbackPolicy::kAdaptive) {
+                throw PollingPlanError("unknown angle feedback policy");
+            }
+            if (impl_->config_.runtime_behavior == RuntimeBehavior::kPython &&
+                channel.semantic == TelemetrySemantic::kAngles &&
+                channel.angle_feedback == AngleFeedbackPolicy::kCommandFeedbackOnly) {
+                const auto *command = capabilities.command(CommandSemantic::kAngles);
+                if (!command || !command->returns_current_state) {
+                    throw PollingPlanError("angle command does not return verified current state");
+                }
+            }
             if (channel.interval.count() <= 0) {
                 throw PollingPlanError("polling intervals must be positive",
                                        {"start_polling", unified_detail::model_name(impl_->config_.model)});
@@ -1574,6 +1676,9 @@ namespace linkerbot::hand {
                 impl_->verified_capabilities_ = std::move(initialized.capabilities);
                 // Advance the readable generation only after initialization state is installed.
                 ++impl_->cache_generation_;
+                if (python && impl_->identity_) {
+                    impl_->identity_->meta.connection_generation = impl_->cache_generation_;
+                }
                 impl_->cache_physical_generation_ = physical_generation;
                 impl_->cached_source_sequence_.reset();
                 impl_->state_.store(Impl::State::kReady, std::memory_order_release);

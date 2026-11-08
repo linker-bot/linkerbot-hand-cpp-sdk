@@ -1,5 +1,17 @@
 # Release notes
 
+## 0.3.7
+
+- Extend the explicit `RuntimeBehavior::kPython` policy with publication-based channel sequences and coherent retained snapshots. Cache readers do not advance acquisition counters. Identity reads carry independent sample metadata; closed Python-policy caches retain identity evidence with invalid metadata.
+- Add `wait_for_cached_snapshot(previous, timeout, wake_on_command_feedback)` without overloading the existing two-argument wait signature. Filtered waits use the last non-command publication, retain command feedback in the current cache, and wake when their device generation ends. These waits perform no device I/O.
+- Reject matching malformed Classic tactile rows in the Python policy, including invalid lengths, row markers and conflicting duplicates. Unrelated routes and opcodes remain unmatched. Correct force aggregation so one query replaces its own fields and scalar raw data follows the latest scalar query while matrix evidence from other queries remains available.
+- Read L20Lite fingertip scalar categories independently in the Python policy. Track firmware-optional failures per channel and generation: only sent, unverified optional queries can degrade after repeated response/protocol failures; a previously successful channel is not disabled by later response loss. Disable only that channel and restore probing after explicit recovery.
+- Add query-only, command-feedback-only and adaptive angle feedback policies to unified polling. Only verified current-state command feedback fulfills the requested angle rate. Equivalent plans are no-ops. Polling uses the existing native runtime and transport Session; no second physical send queue is added.
+
+Native behavior remains the default. The policy covers Classic L6, O6, L20Lite, L20, L30 and explicitly selected O30 V25. Existing C++ method signatures remain available; public metadata and configuration additions require rebuilding the SDK and downstream consumers with matching headers and libraries. The minimum and paired transport remain v0.3.4 (`0e190032d65ed0b315337b45b3779cf4f650ed68`). Binary compatibility with earlier headers is not claimed.
+
+Validation uses offline FakeTransport regressions, Python reference contracts, native/source/prebuilt/installed consumers, sanitizers, complete static analysis and the twelve-target release matrix. No new physical-device acceptance is claimed. Adapter/driver/firmware, physical timestamps, deployed tactile layouts, mixed CAN/FD channels and long-duration multi-device behavior require separate hardware validation. O20, Python bindings, automatic reconnect and hand/arm integration are outside this patch. Extended identity raw/version field parity and O30 field-by-field identity requests remain separate work.
+
 ## 0.3.6
 
 - Add an explicit `RuntimeBehavior::kPython` policy for the unified facade. The native policy remains the default. Classic L6, O6, L20Lite, L20, L30 and explicit O30 V25 are in scope; L6 HOP and mounted O30 retain their existing native path.

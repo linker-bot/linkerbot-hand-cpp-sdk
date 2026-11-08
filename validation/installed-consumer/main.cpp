@@ -52,6 +52,10 @@ namespace {
     static_assert(std::is_same_v<decltype(std::declval<const CommandHandle &>().send_results()),
                                  std::vector<linkerbot::transport::SendResult>>);
 
+    static_assert(std::is_same_v<decltype(&HandDevice::wait_for_snapshot),
+                                 linkerbot::hand::HandSnapshot (HandDevice::*)(const linkerbot::hand::HandSnapshot &,
+                                                                               std::chrono::milliseconds) const>);
+
     void verify_python_runtime_contract() {
         using namespace std::chrono_literals;
         auto config = validation::config();
@@ -65,6 +69,15 @@ namespace {
         validation::complete(claimed);
         device.hand.recover_for(2s);
         validation::require(device.hand.is_open(), "profile recovery failed in installed consumer");
+        const auto before = device.hand.get_cached_snapshot();
+        const auto refreshed = device.hand.refresh_device_info(1s);
+        validation::require(refreshed.meta.valid && refreshed.meta.sequence > 0, "installed identity metadata missing");
+        const auto changed = device.hand.wait_for_cached_snapshot(before, 100ms, false);
+        validation::require(changed.device_info && changed.device_info->meta.valid,
+                            "installed filtered cache wait failed");
+        device.hand.start_polling({{linkerbot::hand::TelemetrySemantic::kAngles, 20ms,
+                                    linkerbot::hand::AngleFeedbackPolicy::kCommandFeedbackOnly}});
+        device.hand.stop_polling();
     }
 
     void verify_unified_contract() {

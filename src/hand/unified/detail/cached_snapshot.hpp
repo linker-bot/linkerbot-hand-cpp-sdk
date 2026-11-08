@@ -64,6 +64,9 @@ namespace linkerbot::hand::unified_detail {
 
     inline void set_cached_generation(HandSnapshot &snapshot, uint64_t generation) {
         snapshot.connection_generation = generation;
+        if (snapshot.device_info && snapshot.device_info->meta.valid) {
+            snapshot.device_info->meta.connection_generation = generation;
+        }
         visit_snapshot_samples(snapshot, [generation](auto &sample, TelemetrySemantic) {
             if (!sample) {
                 return;
@@ -78,7 +81,7 @@ namespace linkerbot::hand::unified_detail {
         });
     }
 
-    inline void invalidate_cached_snapshot(HandSnapshot &snapshot) {
+    inline void invalidate_cached_snapshot(HandSnapshot &snapshot, bool retain_identity = false) {
         visit_snapshot_samples(snapshot,
                                [generation = snapshot.connection_generation](auto &sample, TelemetrySemantic) {
                                    if (!sample) {
@@ -100,6 +103,10 @@ namespace linkerbot::hand::unified_detail {
             joint.name = name;
         }
         // DeviceIdentity has no validity metadata, so stale identity is omitted.
-        snapshot.device_info.reset();
+        if (retain_identity && snapshot.device_info) {
+            snapshot.device_info->meta = SampleMeta::unavailable(snapshot.connection_generation);
+        } else {
+            snapshot.device_info.reset();
+        }
     }
 }

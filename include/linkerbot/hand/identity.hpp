@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include <linkerbot/hand/api/readings.hpp>
 #include <linkerbot/hand/capabilities.hpp>
 #include <linkerbot/hand/errors.hpp>
 
@@ -38,6 +39,8 @@ namespace linkerbot::hand {
         std::optional<std::string> hardware_version;
         std::optional<std::string> mechanical_version;
         std::chrono::steady_clock::time_point timestamp;
+        // Populated by the explicit Python runtime policy; timestamp is monotonic.
+        SampleMeta meta;
     };
 
     // Python classic_can.parse_factory_identity contract. No protocol I/O.

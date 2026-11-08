@@ -1,5 +1,9 @@
 #include "detail/backend.hpp"
+#include "detail/cached_snapshot.hpp"
+#include "detail/connection_initializer.hpp"
+#include "detail/force.hpp"
 #include "detail/o30_v25.hpp"
+#include "detail/python_state.hpp"
 #include "detail/python_transactions.hpp"
 #include "detail/read_coordinator.hpp"
 
@@ -78,6 +82,12 @@ namespace linkerbot::hand::unified_detail {
                   dispatch_guard_(std::make_shared<DispatchGuard>()) {
                 if (config_.runtime_behavior == RuntimeBehavior::kPython) {
                     RuntimeAccess::resume_endpoint(*device_->runtime());
+                    python_ = std::make_shared<PythonState>(config_);
+                    RuntimeAccess::set_publication_handler(
+                        *device_->runtime(),
+                        [state = python_](const std::string &domain, const runtime::Sample &sample) {
+                            state->publish(domain, sample);
+                        });
                     reads_ = std::make_unique<ReadCoordinator<ReadValue>>(config_.read_waiter_capacity);
                     return;
                 }
@@ -90,6 +100,10 @@ namespace linkerbot::hand::unified_detail {
             }
 
             ~ModelBackend() override {
+                if (python_) {
+                    python_->stop();
+                    RuntimeAccess::set_publication_handler(*device_->runtime(), {});
+                }
                 reads_closing_.store(true, std::memory_order_release);
                 ++read_epoch_;
                 if (reads_) {
@@ -286,29 +300,54 @@ namespace linkerbot::hand::unified_detail {
                     throw UnsupportedOperationError("telemetry semantic is not supported by this device");
                 }
                 if (reads_) {
+                    if (python_->disabled(semantic)) {
+                        throw UnsupportedFirmwareError("optional telemetry is disabled for this generation");
+                    }
                     const auto *channel = capabilities_.telemetry_channel(semantic);
                     if (channel && (channel->read_mode == ReadMode::kCommandCache ||
                                     channel->read_mode == ReadMode::kCommandResponse)) {
-                        return read_telemetry(*device_, semantic, timeout);
+                        (void)read_telemetry(*device_, semantic, timeout);
+                        try {
+                            auto cached =
+                                telemetry_sample(snapshot(config_.model, config_.side, capabilities_), semantic);
+                            if (!std::visit([](const auto &value) { return value.meta.valid; }, cached)) {
+                                throw UnsupportedOperationError(
+                                    "no configuration response is cached for this generation");
+                            }
+                            return cached;
+                        } catch (const DeviceNotReadyError &) {
+                            throw UnsupportedOperationError("no configuration response is cached for this generation");
+                        }
                     }
-                    std::optional<runtime::Deadline> baseline;
+                    uint64_t baseline = 0;
                     try {
                         const auto previous =
                             telemetry_sample(snapshot(Model::kUnknown, HandSide::kUnknown, capabilities_), semantic);
-                        baseline = std::visit([](const auto &reading) { return reading.meta.collected_at; }, previous);
+                        baseline = std::visit(
+                            [semantic](const auto &reading) {
+                                if constexpr (std::is_same_v<std::decay_t<decltype(reading)>, ForceSample>) {
+                                    for (const auto &field : reading.fields) {
+                                        if (field.query_channel == semantic) {
+                                            return field.meta.sequence;
+                                        }
+                                    }
+                                    return uint64_t{0};
+                                } else {
+                                    return reading.meta.sequence;
+                                }
+                            },
+                            previous);
                     } catch (const DeviceNotReadyError &) {
-                        baseline.reset();
+                        baseline = 0;
                     }
                     const auto deadline = runtime::deadline_after(timeout);
                     const auto valid = read_generation();
                     while (true) {
                         auto value = reads_->read_prepared(
                             static_cast<unsigned>(semantic), deadline,
-                            [this, semantic, valid](const std::shared_ptr<void> &lane) {
+                            [this, semantic, valid, polling](const std::shared_ptr<void> &lane) {
                                 ReadValue result;
-                                with_windows(
-                                    [&] { result = read_direct(semantic, config_.transaction_timeout, valid, lane); },
-                                    valid);
+                                with_windows([&] { result = python_read(semantic, polling, valid, lane); }, valid);
                                 return result;
                             },
                             [this, valid](const std::function<bool()> &demand) {
@@ -318,10 +357,7 @@ namespace linkerbot::hand::unified_detail {
                             polling, poll_cancel);
                         auto sample = std::get<TelemetrySample>(std::move(value));
                         const bool fresh = std::visit(
-                            [&](const auto &reading) {
-                                return reading.meta.collected_at &&
-                                       (!baseline || *reading.meta.collected_at > *baseline);
-                            },
+                            [&](const auto &reading) { return reading.meta.valid && reading.meta.sequence > baseline; },
                             sample);
                         if (fresh) {
                             return sample;
@@ -345,6 +381,14 @@ namespace linkerbot::hand::unified_detail {
                                           : runtime::deadline_after(timeout);
                 auto lease = prepared ? prepared : execution_gate_->acquire(false, deadline, {}, valid);
                 dispatch_guard_->wait(deadline, {}, valid);
+                if constexpr (std::is_same_v<Device, l20lite::L20lite>) {
+                    if (python_ &&
+                        (semantic == TelemetrySemantic::kForceFns || semantic == TelemetrySemantic::kForceFts ||
+                         semantic == TelemetrySemantic::kForceFds || semantic == TelemetrySemantic::kForcePx)) {
+                        read_python_scalar(*device_->runtime(), config_, semantic);
+                        return telemetry_sample(snapshot(config_.model, config_.side, capabilities_), semantic);
+                    }
+                }
                 if constexpr (std::is_same_v<Device, o30::O30>) {
                     if (config_.o30_layout == O30Layout::kPythonV25 && semantic != TelemetrySemantic::kForce &&
                         semantic != TelemetrySemantic::kForceFns) {
@@ -387,6 +431,13 @@ namespace linkerbot::hand::unified_detail {
 
             [[nodiscard]] HandSnapshot snapshot(Model model, HandSide side,
                                                 const DeviceCapabilities &capabilities) const override {
+                if (python_) {
+                    return filtered_snapshot(model, side, capabilities, true);
+                }
+                return native_snapshot(model, side, capabilities);
+            }
+            [[nodiscard]] HandSnapshot native_snapshot(Model model, HandSide side,
+                                                       const DeviceCapabilities &capabilities) const {
                 auto result = unified_snapshot(device_->get_snapshot(), model, side, capabilities);
                 if constexpr (std::is_same_v<Device, o30::O30>) {
                     if (config_.o30_layout == O30Layout::kPythonV25) {
@@ -412,6 +463,33 @@ namespace linkerbot::hand::unified_detail {
                     feedback(result.stall_hold_currents, "stall/hold_relay_");
                 }
                 return result;
+            }
+
+            DeviceCapabilities observed_capabilities(DeviceCapabilities caps) const override {
+                return python_ ? python_->capabilities(std::move(caps)) : caps;
+            }
+            HandSnapshot filtered_snapshot(Model model, HandSide side, const DeviceCapabilities &caps,
+                                           bool include_feedback) const override {
+                if (!python_) {
+                    return native_snapshot(model, side, caps);
+                }
+                const auto view = python_->view(include_feedback);
+                HandSnapshot result;
+                RuntimeAccess::with_snapshot_view(*device_->runtime(), view.samples,
+                                                  [&] { result = native_snapshot(model, side, caps); });
+                python_->project(result, view, caps);
+                return result;
+            }
+            void wait_publication(uint64_t sequence, runtime::Deadline deadline, bool include_feedback,
+                                  const std::function<bool()> &generation_valid) const override {
+                if (python_) {
+                    python_->wait(sequence, deadline, include_feedback, generation_valid);
+                }
+            }
+            void finish_initialization() override {
+                if (python_) {
+                    python_->initialized();
+                }
             }
 
             [[nodiscard]] HandHealth health() const override {
@@ -460,6 +538,9 @@ namespace linkerbot::hand::unified_detail {
                 }
                 // These configuration channels also declare freshness bounds.
                 update(current.configured_speeds, TelemetrySemantic::kConfiguredSpeeds, "speeds");
+                if (python_) {
+                    python_->project_health(health);
+                }
                 return health;
             }
 
@@ -491,7 +572,29 @@ namespace linkerbot::hand::unified_detail {
                                           : runtime::deadline_after(timeout);
                 auto lease = prepared ? prepared : execution_gate_->acquire(false, deadline, {}, valid);
                 dispatch_guard_->wait(deadline, {}, valid);
-                return read_identity(*device_, side, runtime::remaining(deadline));
+                auto identity = read_identity(*device_, side, runtime::remaining(deadline));
+                if (python_) {
+                    const auto view = python_->view();
+                    const auto previous = view.samples.find("python/identity");
+                    std::optional<DeviceIdentity> expected;
+                    if (previous != view.samples.end()) {
+                        expected = std::any_cast<DeviceIdentity>(previous->second.value);
+                    }
+                    validate_connection_identity(identity, config_, expected ? &*expected : nullptr,
+                                                 "refresh_device_info");
+                    auto provenance = device_->runtime()->response_provenance();
+                    identity.meta.valid = true;
+                    identity.meta.stale = false;
+                    identity.meta.origin = TelemetryValueOrigin::kDeviceConfigured;
+                    identity.meta.delivery = TelemetryDelivery::kQueryResponse;
+                    identity.meta.collected_at = identity.timestamp;
+                    identity.meta.connection_generation = provenance.device_generation;
+                    identity.meta.sequence = 1;
+                    provenance.received_at = identity.timestamp;
+                    device_->runtime()->publish("python/identity", identity, provenance);
+                    identity = std::any_cast<DeviceIdentity>(python_->view().samples.at("python/identity").value);
+                }
+                return identity;
             }
 
             TelemetrySample initialize_read(TelemetrySemantic semantic, std::chrono::milliseconds timeout) override {
@@ -506,31 +609,31 @@ namespace linkerbot::hand::unified_detail {
             }
             void start_polling(const PollingPlan &plan) override {
                 if (reads_) {
-                    std::vector<runtime::DeviceRuntime::PollTask> tasks;
-                    for (const auto &channel : plan) {
-                        runtime::DeviceRuntime::PollTask task;
-                        task.name = python_polling_domain(channel.semantic);
-                        task.period = channel.interval;
-                        task.run = [this, semantic = channel.semantic](runtime::CancellationToken token) {
-                            try {
-                                (void)coordinated_read(semantic, config_.transaction_timeout, true, token);
-                            } catch (const TimeoutError &) {
-                                // A poll miss or caller wait expiry does not fault
-                                // unrelated channels or cancel shared readers.
-                                return;
-                            } catch (const ClosedError &) {
-                                // A previous read generation ended. Lifecycle code
-                                // owns poll shutdown/restart; do not fault peers.
-                                return;
-                            } catch (const ProtocolError &) {
-                                // The native transaction already recorded this
-                                // protocol failure and retained successful data.
-                                return;
-                            }
-                        };
-                        tasks.push_back(std::move(task));
+                    if (!python_->replace(plan)) {
+                        return;
                     }
-                    device_->runtime()->start_polling(std::move(tasks));
+                    runtime::DeviceRuntime::PollTask task;
+                    task.name = "python-feedback";
+                    task.period = std::chrono::milliseconds{1};
+                    task.next = [state = python_] { return state->next_poll(); };
+                    task.run = [this](runtime::CancellationToken token) {
+                        const auto semantic = python_->take_poll();
+                        if (!semantic || token.cancelled()) {
+                            return;
+                        }
+                        try {
+                            (void)coordinated_read(*semantic, config_.transaction_timeout, true, token);
+                        } catch (const TimeoutError &) {
+                            return;
+                        } catch (const ClosedError &) {
+                            return;
+                        } catch (const ProtocolError &) {
+                            return;
+                        } catch (const UnsupportedFirmwareError &) {
+                            return;
+                        }
+                    };
+                    device_->runtime()->start_polling({std::move(task)});
                     return;
                 }
                 if constexpr (std::is_same_v<Device, o30::O30>) {
@@ -572,17 +675,26 @@ namespace linkerbot::hand::unified_detail {
                 if (reads_) {
                     reads_->drain();
                     RuntimeAccess::resume_endpoint(*device_->runtime());
+                    python_->resume();
                     reads_->activate();
                 }
             }
             void cancel_commands() override {
+                if (python_) {
+                    python_->stop();
+                }
                 ++read_epoch_;
                 if (reads_) {
                     reads_->invalidate();
                 }
                 device_->runtime()->cancel_all();
             }
-            void stop_polling() override { device_->stop_polling(); }
+            void stop_polling() override {
+                if (python_) {
+                    python_->stop_polling();
+                }
+                device_->stop_polling();
+            }
             void wait_quiet(std::chrono::milliseconds quiet, runtime::Deadline deadline,
                             const std::function<bool()> &cancelled) override {
                 RuntimeAccess::wait_endpoint_quiet(*device_->runtime(), quiet, deadline, cancelled);
@@ -605,6 +717,9 @@ namespace linkerbot::hand::unified_detail {
                     reads_->drain();
                 }
                 recover_device(*device_);
+                if (python_) {
+                    python_->reset();
+                }
                 if (reads_) {
                     reads_->activate();
                 }
@@ -638,6 +753,45 @@ namespace linkerbot::hand::unified_detail {
             }
 
         private:
+            TelemetrySample python_read(TelemetrySemantic semantic, bool polling, const std::function<bool()> &valid,
+                                        const std::shared_ptr<void> &lane) {
+                if (python_->disabled(semantic)) {
+                    throw UnsupportedFirmwareError("optional telemetry is disabled for this generation");
+                }
+                const auto sent = device_->runtime()->runtime_health().sent_frames;
+                try {
+                    (void)read_direct(semantic, config_.transaction_timeout, valid, lane);
+                    auto result = telemetry_sample(snapshot(config_.model, config_.side, capabilities_), semantic);
+                    if (auto *force = std::get_if<ForceSample>(&result)) {
+                        force->fields.erase(
+                            std::remove_if(force->fields.begin(), force->fields.end(),
+                                           [semantic](const auto &field) { return field.query_channel != semantic; }),
+                            force->fields.end());
+                        if (semantic != TelemetrySemantic::kForce) {
+                            force->raw.clear();
+                            force->tactile.clear();
+                            force->sensors.clear();
+                            force->shape = {5};
+                            for (const auto &field : force->fields) {
+                                force->meta = field.meta;
+                                for (const auto &finger : field.raw) {
+                                    if (finger) {
+                                        for (const auto value : *finger) {
+                                            force->raw.push_back(static_cast<uint8_t>(value));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    python_->read_succeeded(semantic, polling);
+                    return result;
+                } catch (const HandError &error) {
+                    python_->read_failed(semantic, device_->runtime()->runtime_health().sent_frames > sent, error,
+                                         polling);
+                    throw;
+                }
+            }
             using ReadValue = std::variant<TelemetrySample, DeviceIdentity>;
             std::function<bool()> read_generation() {
                 const auto epoch = read_epoch_.load(std::memory_order_acquire);
@@ -666,6 +820,7 @@ namespace linkerbot::hand::unified_detail {
             std::shared_ptr<ExecutionGate> execution_gate_;
             std::shared_ptr<DispatchGuard> dispatch_guard_;
             std::unique_ptr<ReadCoordinator<ReadValue>> reads_;
+            std::shared_ptr<PythonState> python_;
             std::atomic<uint64_t> read_epoch_{0};
             std::atomic<bool> reads_closing_{false};
             std::atomic<runtime::Clock::duration::rep> execution_deadline_{

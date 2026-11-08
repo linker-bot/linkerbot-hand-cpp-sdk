@@ -41,6 +41,20 @@ namespace linkerbot::hand::unified_detail {
         virtual ~DeviceBackend() = default;
         virtual void stop_admission() {}
         virtual void resume_admission() {}
+        virtual DeviceCapabilities observed_capabilities(DeviceCapabilities value) const { return value; }
+        virtual HandSnapshot filtered_snapshot(Model model, HandSide side, const DeviceCapabilities &caps,
+                                               bool include_feedback) const {
+            (void)include_feedback;
+            return snapshot(model, side, caps);
+        }
+        virtual void wait_publication(uint64_t sequence, runtime::Deadline deadline, bool include_feedback,
+                                      const std::function<bool()> &generation_valid = {}) const {
+            (void)sequence;
+            (void)deadline;
+            (void)include_feedback;
+            (void)generation_valid;
+        }
+        virtual void finish_initialization() {}
 
         [[nodiscard]] virtual CommandHandle submit(const CommandRequest &request) = 0;
         [[nodiscard]] virtual TelemetrySample read(TelemetrySemantic semantic, std::chrono::milliseconds timeout) = 0;

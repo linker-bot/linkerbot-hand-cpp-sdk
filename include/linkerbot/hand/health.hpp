@@ -1,6 +1,7 @@
 #pragma once
 
 #include <linkerbot/can/health.hpp>
+#include <linkerbot/hand/capabilities.hpp>
 #include <linkerbot/hand/errors.hpp>
 #include <linkerbot/transport/session.hpp>
 
@@ -98,6 +99,8 @@ namespace linkerbot::hand {
         DataAge data_age;
         LatencyMetrics latency;
         QueueMetrics queue;
+        uint64_t command_feedback_samples = 0;
+        std::optional<AngleFeedbackPolicy> feedback_policy;
     };
 
     // One independently scheduled command family. Counters count logical

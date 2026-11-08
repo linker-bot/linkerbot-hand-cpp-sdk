@@ -7,6 +7,7 @@
 namespace linkerbot::hand::unified_detail {
     void validate_force_field(std::string_view name);
     void merge_force_samples(ForceSample &target, const ForceSample &source);
+    void merge_python_force_samples(ForceSample &target, const ForceSample &source);
     ForceSample tip_force_sample(const l20lite::TipForceData &data, SampleMeta meta,
                                  const DeviceCapabilities &capabilities);
     ForceSample descriptor_force_sample(const o30::SensorData &data, SampleMeta meta);

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(linkerbot-hand-cpp
-    VERSION 0.3.6
+    VERSION 0.3.7
     DESCRIPTION "LinkerBot dexterous hand C++ SDK"
     LANGUAGES CXX
 )

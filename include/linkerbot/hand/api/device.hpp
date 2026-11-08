@@ -192,6 +192,12 @@ namespace linkerbot::hand {
         [[nodiscard]] HandSnapshot wait_for_snapshot(const HandSnapshot &previous,
                                                      std::chrono::milliseconds timeout) const;
 
+        // Python-compatible retained-cache wait. Filtering excludes command-only
+        // publications from wakeups, but does not remove them from the cache.
+        [[nodiscard]] HandSnapshot wait_for_cached_snapshot(const HandSnapshot &previous,
+                                                            std::chrono::milliseconds timeout,
+                                                            bool wake_on_command_feedback = true) const;
+
         void start_polling();
         void start_polling(const PollingPlan &plan);
         void stop_polling();

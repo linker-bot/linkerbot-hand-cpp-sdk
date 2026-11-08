@@ -96,6 +96,12 @@ namespace linkerbot::hand::runtime {
             return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
         }
 
+        struct SnapshotView {
+            const DeviceRuntime *runtime;
+            const std::map<std::string, Sample> *samples;
+        };
+        thread_local std::optional<SnapshotView> current_snapshot_view;
+
         std::string canonical_channel(std::string_view domain) {
             if (domain == "angle" || domain == "angles") {
                 return "angles";
@@ -548,6 +554,7 @@ namespace linkerbot::hand::runtime {
         std::mutex lifecycle;
         std::mutex polling_operation;
         unified_detail::RuntimeAccess::PollingGate polling_gate;
+        unified_detail::RuntimeAccess::PublicationHandler publication_handler;
         std::thread rx;
         bool rx_stop = false;
         bool destruction_requested = false;
@@ -816,6 +823,11 @@ namespace linkerbot::hand::runtime {
                 last_successful_receive = sample.received_at;
             }
             samples[domain] = sample;
+            if (publication_handler) {
+                publication_handler(domain, sample);
+                ++polling_wake;
+                cv.notify_all();
+            }
             for (const auto &[id, subscriber] : subscribers) {
                 (void)id;
                 if (subscriber.domain == domain && !Events::instance().post(subscriber.slot, sample, owner)) {
@@ -1024,6 +1036,9 @@ namespace linkerbot::hand::runtime {
                                                    ::linkerbot::hand::detail::checked_value(
                                                        state->plan.optional_response_window,
                                                        "missing runtime state: state->plan.optional_response_window")) {
+                        if (publication_handler && state->scoped_response_policy) {
+                            publication_handler(state->plan.domain, Sample{});
+                        }
                         finish_locked(state, {}, true);
                     }
                 }
@@ -1636,6 +1651,11 @@ namespace linkerbot::hand::runtime {
         (void)execute(std::move(plan), deadline, cancellation);
     }
     std::optional<Sample> DeviceRuntime::snapshot(const std::string &domain) const {
+        if (current_snapshot_view && current_snapshot_view->runtime == this) {
+            const auto &samples = *current_snapshot_view->samples;
+            const auto found = samples.find(domain);
+            return found == samples.end() ? std::nullopt : std::optional<Sample>{found->second};
+        }
         std::lock_guard<std::mutex> lock(impl_->mutex);
         const auto it = impl_->samples.find(domain);
         if (it == impl_->samples.end()) {
@@ -2864,4 +2884,20 @@ void linkerbot::hand::unified_detail::RuntimeAccess::retire_closed_profiles(
             ++it;
         }
     }
+}
+
+void linkerbot::hand::unified_detail::RuntimeAccess::set_publication_handler(runtime::DeviceRuntime &device,
+                                                                             PublicationHandler handler) {
+    std::lock_guard<std::mutex> lock(device.impl_->mutex);
+    device.impl_->publication_handler = std::move(handler);
+}
+void linkerbot::hand::unified_detail::RuntimeAccess::with_snapshot_view(
+    const runtime::DeviceRuntime &device, const std::map<std::string, runtime::Sample> &samples,
+    const std::function<void()> &read) {
+    struct Restore {
+        std::optional<runtime::SnapshotView> previous;
+        ~Restore() { runtime::current_snapshot_view = previous; }
+    } restore{runtime::current_snapshot_view};
+    runtime::current_snapshot_view = runtime::SnapshotView{&device, &samples};
+    read();
 }

@@ -18,6 +18,8 @@ namespace linkerbot::hand {
 
     enum class HandSide : uint8_t { kUnknown, kLeft, kRight };
 
+    enum class AngleFeedbackPolicy : uint8_t { kQueryOnly, kCommandFeedbackOnly, kAdaptive };
+
     enum class TransportKind : uint8_t { kCan, kCanFd };
 
     enum class Confidence : uint8_t { kMeasured, kDocumented, kApproximate, kConflicting, kUnknown };
@@ -243,6 +245,7 @@ namespace linkerbot::hand {
         std::optional<std::string_view> raw_unit;
         std::optional<std::string_view> raw_encoding;
         std::optional<std::string_view> raw_scale_note;
+        bool firmware_unsupported = false;
     };
 
     // Capability strings are non-owning views into SDK-owned static profile data.
@@ -258,6 +261,8 @@ namespace linkerbot::hand {
         CapabilitySchemaVersion schema_version = kCapabilitySchemaVersion;
         // Runtime descriptor observations; views still reference static profile names.
         std::vector<ForceFieldCapability> observed_force_fields;
+        // Observed only in the current verified connection generation.
+        std::vector<TelemetrySemantic> firmware_unsupported_telemetry;
 
         [[nodiscard]] bool supports(CommandSemantic semantic) const noexcept;
         [[nodiscard]] bool supports(TelemetrySemantic semantic) const noexcept;
