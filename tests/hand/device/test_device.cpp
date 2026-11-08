@@ -4347,8 +4347,12 @@ TEST_CASE("Python L20 idle late write replies do not publish or complete future 
     device.open();
     install_l20_dispatch_only(transport);
     const auto before = device.get_snapshot();
+    const auto baseline = device.get_health().transaction_latency.count;
     completed(device.set_speeds(std::vector<double>(16, 10)));
     completed(device.set_current_limits(std::vector<double>(16, 10)));
+    // Physical dispatch may precede logical metric finalization. Observe both
+    // writes before measuring whether unsolicited frames create extra samples.
+    REQUIRE(wait_until([&] { return device.get_health().transaction_latency.count == baseline + 2; }));
     const auto latency = device.get_health().transaction_latency.count;
     const auto sent = transport->sent();
     for (const auto &request : sent) {
@@ -4370,7 +4374,7 @@ TEST_CASE("Python L20 idle late write replies do not publish or complete future 
         REQUIRE(after.currents->meta.sequence == before.currents->meta.sequence);
     }
     REQUIRE(after.measured_speeds.has_value() == before.measured_speeds.has_value());
-    REQUIRE(device.get_health().transaction_latency.count == latency + 1);
+    REQUIRE(wait_until([&] { return device.get_health().transaction_latency.count == latency + 1; }));
     REQUIRE(device.get_speeds(750ms).raw != std::vector<double>(16, 10));
     REQUIRE(device.get_currents(750ms).raw == std::vector<double>(16, 64));
     REQUIRE(device.get_health().consecutive_errors == 0);
