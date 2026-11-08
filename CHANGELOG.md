@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.11
+
+- Release L20 dispatch-only write reply reservations under the explicit Python policy.
+- Reject Python-policy response frames received before physical send claim; cover late replies, lifecycle transitions and shared Session isolation.
+- Preserve Native behavior, public APIs and transport v0.3.4 minimum. Rebuild consumers; hardware validation remains separate. See [release notes](RELEASE_NOTES.md).
+
 ## 0.3.10
 
 - Correct Python-policy missing-command-feedback health without changing physical dispatch outcomes or Native defaults.

@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
 
+## 0.3.11
+
+- 显式 Python 策略下，L20 仅发送写入不再保留可选回复及读取匹配资源。
+- Python 策略拒绝读取实际开始发送前收到的回复，增加迟到回复、生命周期及共享 Session 隔离回归测试。
+- 保持 Native 行为、公开 API 和 transport v0.3.4 最低依赖。消费者需重新编译，实机验证仍单独进行，详见 [发行说明](RELEASE_NOTES.md)。
+
 ## 0.3.10
 
 - 修正 Python 策略缺少命令反馈时的健康统计，保持实际发送结果及 Native 默认行为。

@@ -4243,14 +4243,14 @@ TEST_CASE("Python O30 force fields project one completed shared polling query", 
     device.close();
 }
 
-TEST_CASE("Python L20 non-angle writes do not require native optional observations", "[comm][python-phase5]") {
+TEST_CASE("Python L20 non-angle writes release reads without optional replies", "[comm][python-phase5][l20-dispatch]") {
     using namespace std::chrono_literals;
     for (const auto semantic : {CommandSemantic::kSpeeds, CommandSemantic::kCurrentLimits}) {
         CAPTURE(semantic);
         auto config = config_for(Model::kL20);
         config.runtime_behavior = RuntimeBehavior::kPython;
         config.identity_timeout = 300ms;
-        config.response_timeout = 20ms;
+        config.response_timeout = 5s;
         FakeTransport *transport = nullptr;
         std::shared_ptr<o30_comm::HopEndpoint> hop;
         HandDevice device(config, [&] {
@@ -4268,12 +4268,12 @@ TEST_CASE("Python L20 non-angle writes do not require native optional observatio
         auto command =
             semantic == CommandSemantic::kSpeeds ? device.set_speeds(values) : device.set_current_limits(values);
         completed(command);
-        // A read with the same wire key drains the optional observation before
-        // succeeding. Its success must not conceal a spurious recent timeout.
+        // The caller budget is shorter than the old optional reply window.
+        // A same-key read must succeed without waiting for that window.
         if (semantic == CommandSemantic::kSpeeds) {
-            REQUIRE(device.get_speeds(1s).meta.valid);
+            REQUIRE(device.get_speeds(750ms).meta.valid);
         } else {
-            REQUIRE(device.get_currents(1s).meta.valid);
+            REQUIRE(device.get_currents(750ms).meta.valid);
         }
         const auto health = device.get_health();
         REQUIRE(health.transaction_latency.count == before + 2);
@@ -4283,4 +4283,198 @@ TEST_CASE("Python L20 non-angle writes do not require native optional observatio
         REQUIRE_FALSE(command.error());
         device.close();
     }
+}
+
+namespace {
+    HandDeviceConfig python_l20_dispatch_config() {
+        auto config = config_for(Model::kL20);
+        config.runtime_behavior = RuntimeBehavior::kPython;
+        config.identity_timeout = std::chrono::milliseconds{750};
+        config.response_timeout = std::chrono::seconds{5};
+        return config;
+    }
+
+    void install_l20_dispatch_only(FakeTransport *transport, uint32_t address = 0x28) {
+        transport->on_request(address, [](const Message &request) {
+            if (request.dlc > 1) {
+                return std::vector<Message>{};
+            }
+            return classic_angle_reply(Model::kL20, request);
+        });
+    }
+
+    void verify_l20_write_read(HandDevice &device) {
+        const std::vector<double> values(16, 10);
+        completed(device.set_speeds(values));
+        REQUIRE(device.get_speeds(std::chrono::milliseconds{750}).meta.valid);
+        completed(device.set_current_limits(values));
+        REQUIRE(device.get_currents(std::chrono::milliseconds{750}).raw == std::vector<double>(16, 64));
+        completed(device.clear_faults());
+        REQUIRE(device.get_faults(std::chrono::milliseconds{750}).meta.valid);
+        REQUIRE(device.get_health().consecutive_errors == 0);
+        REQUIRE_FALSE(device.get_health().recent_error);
+    }
+}
+
+TEST_CASE("Python L20 repeated dispatch-only controls do not hold read keys", "[comm][python-phase5][l20-dispatch]") {
+    FakeTransport *transport = nullptr;
+    HandDevice device(python_l20_dispatch_config(), [&] {
+        auto next = std::make_unique<FakeTransport>();
+        transport = next.get();
+        install_classic_identity(transport, Model::kL20);
+        return next;
+    });
+    device.open();
+    install_l20_dispatch_only(transport);
+    const auto baseline = device.get_health().transaction_latency.count;
+    for (int round = 0; round < 3; ++round) {
+        verify_l20_write_read(device);
+    }
+    REQUIRE(device.get_health().transaction_latency.count == baseline + 18);
+    device.close();
+}
+
+TEST_CASE("Python L20 idle late write replies do not publish or complete future reads",
+          "[comm][python-phase5][l20-dispatch]") {
+    using namespace std::chrono_literals;
+    FakeTransport *transport = nullptr;
+    HandDevice device(python_l20_dispatch_config(), [&] {
+        auto next = std::make_unique<FakeTransport>();
+        transport = next.get();
+        install_classic_identity(transport, Model::kL20);
+        return next;
+    });
+    device.open();
+    install_l20_dispatch_only(transport);
+    const auto before = device.get_snapshot();
+    completed(device.set_speeds(std::vector<double>(16, 10)));
+    completed(device.set_current_limits(std::vector<double>(16, 10)));
+    const auto latency = device.get_health().transaction_latency.count;
+    const auto sent = transport->sent();
+    for (const auto &request : sent) {
+        if (request.dlc > 1) {
+            for (const auto &reply : classic_angle_reply(Model::kL20, request)) {
+                transport->inject(reply);
+            }
+            auto malformed = request;
+            malformed.dlc = 2;
+            transport->inject(malformed);
+        }
+    }
+    // Complete an unrelated angle query behind the injected backlog. It is a
+    // receive-worker barrier, rather than a sleep used to guess processing time.
+    REQUIRE(device.get_angles(750ms).meta.valid);
+    const auto after = device.get_snapshot();
+    REQUIRE(after.currents.has_value() == before.currents.has_value());
+    if (before.currents) {
+        REQUIRE(after.currents->meta.sequence == before.currents->meta.sequence);
+    }
+    REQUIRE(after.measured_speeds.has_value() == before.measured_speeds.has_value());
+    REQUIRE(device.get_health().transaction_latency.count == latency + 1);
+    REQUIRE(device.get_speeds(750ms).raw != std::vector<double>(16, 10));
+    REQUIRE(device.get_currents(750ms).raw == std::vector<double>(16, 64));
+    REQUIRE(device.get_health().consecutive_errors == 0);
+    REQUIRE_FALSE(device.get_health().recent_error);
+    device.close();
+}
+
+TEST_CASE("Python L20 dispatch-only writes leave no reply state across close reopen and recovery",
+          "[comm][python-phase5][l20-dispatch]") {
+    using namespace std::chrono_literals;
+    FakeTransport *transport = nullptr;
+    HandDevice device(python_l20_dispatch_config(), [&] {
+        auto next = std::make_unique<FakeTransport>();
+        transport = next.get();
+        install_classic_identity(transport, Model::kL20);
+        return next;
+    });
+    device.open();
+    install_l20_dispatch_only(transport);
+    completed(device.set_speeds(std::vector<double>(16, 10)));
+    device.close();
+    REQUIRE_THROWS_AS(device.get_speeds(750ms), DeviceNotReadyError);
+    device.open();
+    install_l20_dispatch_only(transport);
+    verify_l20_write_read(device);
+    completed(device.set_current_limits(std::vector<double>(16, 10)));
+    // Recovery performs identity and baseline reads, so restore the device's
+    // normal identity responder before entering the recovery state machine.
+    install_classic_identity(transport, Model::kL20);
+    device.recover();
+    install_l20_dispatch_only(transport);
+    verify_l20_write_read(device);
+    device.close();
+}
+
+TEST_CASE("Python L20 dispatch-only state remains device-local on a shared Session",
+          "[comm][python-phase5][l20-dispatch]") {
+    using namespace std::chrono_literals;
+    auto transport = std::make_unique<FakeTransport>();
+    auto *raw = transport.get();
+    install_classic_identity(raw, Model::kL20, "LHT20-1-123-L", 0x28);
+    install_classic_identity(raw, Model::kL20, "LHT20-1-456-R", 0x27);
+    auto session = linkerbot::transport::Session::own(std::move(transport));
+    auto left_config = python_l20_dispatch_config();
+    auto right_config = left_config;
+    right_config.side = HandSide::kRight;
+    HandDevice left(left_config, session);
+    HandDevice right(right_config, session);
+    left.open();
+    right.open();
+    install_l20_dispatch_only(raw, 0x28);
+    install_l20_dispatch_only(raw, 0x27);
+    completed(left.set_speeds(std::vector<double>(16, 10)));
+    const auto right_before = right.get_health().transaction_latency.count;
+    REQUIRE(right.get_speeds(750ms).meta.valid);
+    REQUIRE(right.get_health().transaction_latency.count == right_before + 1);
+    REQUIRE(left.get_speeds(750ms).meta.valid);
+    completed(left.set_current_limits(std::vector<double>(16, 10)));
+    left.close();
+    REQUIRE(session->health().open);
+    verify_l20_write_read(right);
+    install_classic_identity(raw, Model::kL20, "LHT20-1-123-L", 0x28);
+    left.open();
+    install_l20_dispatch_only(raw, 0x28);
+    verify_l20_write_read(left);
+    verify_l20_write_read(right);
+    left.close();
+    right.close();
+    session->close();
+}
+
+TEST_CASE("Python L20 queued reads reject write replies received before physical claim",
+          "[comm][python-phase5][l20-dispatch]") {
+    using namespace std::chrono_literals;
+    auto transport = std::make_unique<FakeTransport>();
+    auto *raw = transport.get();
+    install_classic_identity(raw, Model::kL20);
+    auto session = linkerbot::transport::Session::own(std::move(transport));
+    HandDevice device(python_l20_dispatch_config(), session);
+    device.open();
+    install_l20_dispatch_only(raw);
+    const auto expected = device.get_speeds(750ms).raw;
+    completed(device.set_speeds(std::vector<double>(16, 10)));
+    const auto sent = raw->sent();
+
+    Message unrelated{};
+    unrelated.id = 0x123;
+    unrelated.dlc = 1;
+    linkerbot::transport::MessageBatch blocker{{unrelated}};
+    blocker.initial_delay = 800ms;
+    auto receipt = session->submit(std::move(blocker));
+    REQUIRE(wait_until([&] { return receipt.result().claimed_at.has_value(); }));
+    auto read = std::async(std::launch::async, [&] { return device.get_speeds(2s); });
+    REQUIRE(wait_until([&] { return session->health().pending_fifo > 0; }));
+    for (const auto &request : sent) {
+        if (request.dlc > 1 && request.data[0] >= 0x49 && request.data[0] <= 0x4D) {
+            for (const auto &reply : classic_angle_reply(Model::kL20, request)) {
+                raw->inject(reply);
+            }
+        }
+    }
+    REQUIRE(read.get().raw == expected);
+    REQUIRE(receipt.completed());
+    REQUIRE(device.get_health().consecutive_errors == 0);
+    device.close();
+    session->close();
 }

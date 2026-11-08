@@ -58,6 +58,18 @@ namespace linkerbot::hand::unified_detail {
         if (!plan.consume) {
             return plan;
         }
+        // Python classic multi-axis writes only collect angle feedback. Keep
+        // the physical batch/receipt, but do not reserve a read correlation key
+        // or publish native optional observations for dispatch-only controls.
+        if (config.model == Model::kL20 && plan.optional_response_window && !plan.command_family.empty() &&
+            plan.command_family != "angle") {
+            plan.consume = {};
+            plan.keys.clear();
+            plan.optional_response_window.reset();
+            plan.response_window.reset();
+            plan.supersede_optional_feedback = false;
+            return plan;
+        }
         using namespace std::chrono_literals;
         auto window = 100ms;
         auto guard = 5ms;

@@ -1116,6 +1116,15 @@ namespace linkerbot::hand::runtime {
                     input.received_at < state->receipt->result().accepted_at) {
                     continue;
                 }
+                if (state->scoped_response_policy) {
+                    const auto send = state->receipt->result();
+                    // Python accepts response frames from physical claim, not
+                    // queue admission. A queued read must not consume an older
+                    // dispatch-only write echo while another batch owns TX.
+                    if (!send.claimed_at || input.received_at < *send.claimed_at) {
+                        continue;
+                    }
+                }
                 if (state->response || state->buffered_error) {
                     if (state->plan.defer_errors_until_send) {
                         // This request still owns its response domain while the

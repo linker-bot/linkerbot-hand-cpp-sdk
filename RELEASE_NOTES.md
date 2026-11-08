@@ -1,5 +1,15 @@
 # Release notes
 
+## 0.3.11
+
+- Under the explicit Python runtime policy, L20 speed, current-limit and fault-clear writes end at physical dispatch without retaining Native optional reply decoders or read-key reservations. Subsequent reads do not wait for an unused reply window.
+- Python-policy response matching starts at physical send claim. Replies received before a queued read is claimed cannot complete that read. Idle L20 write replies are not published as telemetry. Classic L20 replies have no transaction identifier: a same-opcode late write reply received after a read is claimed remains indistinguishable from a read response, as in the Python reference.
+- Keep Native optional feedback, existing public C++ APIs, frame contents and inter-frame delays unchanged. No additional sender or scheduling queue is introduced.
+
+The minimum and paired transport remain v0.3.4 (`0e190032d65ed0b315337b45b3779cf4f650ed68`). Rebuild the SDK and downstream consumers to use the fix; no public structures or signatures are added in this patch.
+
+Validation is offline and covers missing and late replies, repeated write/read sequences, close/reopen, explicit recovery, queued-read claim boundaries and device isolation on a shared Session. No new physical-device acceptance is claimed. Deployed firmware reply timing, adapters/drivers, physical timestamps and multi-device sustained operation require separate hardware validation. O20, Python bindings and hand/arm integration are outside this patch.
+
 ## 0.3.10
 
 - Treat missing verified angle-command feedback as a logical timeout under the Python policy. Preserve the command's physical `Dispatched` outcome, exclude it from successful transaction latency and retain its error count until a complete logical success. Native optional-feedback accounting is unchanged.

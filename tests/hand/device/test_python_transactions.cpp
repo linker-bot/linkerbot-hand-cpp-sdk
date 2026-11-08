@@ -106,3 +106,34 @@ TEST_CASE("Python L30 response validation distinguishes protocol errors from dev
     REQUIRE((tactile.response_window == 50ms));
     REQUIRE((tactile.late_guard == 20ms));
 }
+
+TEST_CASE("Python L20 non-angle controls release native reply reservations", "[comm][python-phase5][l20-dispatch]") {
+    HandDeviceConfig config;
+    config.model = Model::kL20;
+    config.response_timeout = 5s;
+    l20::protocol::Backend backend(0x28);
+    for (const auto *operation : {"speed", "current_limit", "fault"}) {
+        CAPTURE(operation);
+        auto native = backend.make_command(operation, std::array<uint8_t, l20::kJointCount>{});
+        REQUIRE(native.consume);
+        REQUIRE(native.optional_response_window == 200ms);
+        REQUIRE(native.supersede_optional_feedback);
+        const auto profile = unified_detail::python_transaction(native, config);
+        REQUIRE_FALSE(profile.consume);
+        REQUIRE(profile.keys.empty());
+        REQUIRE_FALSE(profile.response_window);
+        REQUIRE_FALSE(profile.optional_response_window);
+        REQUIRE_FALSE(profile.supersede_optional_feedback);
+        REQUIRE(profile.frames.size() == native.frames.size());
+        REQUIRE(profile.gap == native.gap);
+        REQUIRE(profile.command_family == native.command_family);
+    }
+    auto angle = unified_detail::python_transaction(
+        backend.make_command("angle", std::array<uint8_t, l20::kJointCount>{}), config);
+    REQUIRE(angle.consume);
+    REQUIRE(angle.optional_response_window == 5s);
+    REQUIRE(angle.supersede_optional_feedback);
+    auto read = unified_detail::python_transaction(backend.make_read("speed"), config);
+    REQUIRE(read.consume);
+    REQUIRE(read.response_window == 5s);
+}
