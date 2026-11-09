@@ -3923,6 +3923,9 @@ TEST_CASE("L20Lite verified firmware rejects unavailable scalar force without IO
 
 TEST_CASE("L20Lite measured speed never populates or overwrites configured speed",
           "[comm][device][l20lite][configured-speed]") {
+    // This checks cache semantics, not the default request deadline. Even cache
+    // reads run through the device worker, which can be delayed on loaded CI hosts.
+    const auto timeout = std::chrono::seconds{2};
     FakeTransport *transport = nullptr;
     HandDevice device(config_for(Model::kL20Lite), [&] {
         auto next = std::make_unique<FakeTransport>();
@@ -3944,16 +3947,16 @@ TEST_CASE("L20Lite measured speed never populates or overwrites configured speed
         }
         return classic_angle_reply(Model::kL20Lite, request);
     });
-    REQUIRE(device.get_speeds().raw == std::vector<double>(10, 0));
-    REQUIRE_THROWS_AS(device.get_configured_speeds(), DeviceNotReadyError);
+    REQUIRE(device.get_speeds(timeout).raw == std::vector<double>(10, 0));
+    REQUIRE_THROWS_AS(device.get_configured_speeds(timeout), DeviceNotReadyError);
     REQUIRE_FALSE(device.get_snapshot().configured_speeds.has_value());
     REQUIRE(completed(device.set_speeds(std::vector<double>(10, 20))).stage() == CommandStage::kAcknowledged);
-    const auto configured = device.get_configured_speeds();
+    const auto configured = device.get_configured_speeds(timeout);
     REQUIRE(configured.raw == std::vector<double>(10, 20));
     REQUIRE(configured.meta.delivery == TelemetryDelivery::kCommandResponse);
-    REQUIRE(device.get_speeds().raw == std::vector<double>(10, 0));
+    REQUIRE(device.get_speeds(timeout).raw == std::vector<double>(10, 0));
     const auto sent = transport->sent().size();
-    REQUIRE(device.get_configured_speeds().raw == configured.raw);
+    REQUIRE(device.get_configured_speeds(timeout).raw == configured.raw);
     REQUIRE(transport->sent().size() == sent);
     const auto snapshot = device.get_snapshot();
     REQUIRE(test_support::require_value(snapshot.measured_speeds).raw == std::vector<double>(10, 0));
@@ -3961,7 +3964,7 @@ TEST_CASE("L20Lite measured speed never populates or overwrites configured speed
     REQUIRE(snapshot.joints[0].measured_speed_raw == 0);
     REQUIRE(snapshot.joints[0].configured_speed_raw == 20);
     device.recover();
-    REQUIRE_THROWS_AS(device.get_configured_speeds(), DeviceNotReadyError);
+    REQUIRE_THROWS_AS(device.get_configured_speeds(timeout), DeviceNotReadyError);
     device.close();
 }
 
