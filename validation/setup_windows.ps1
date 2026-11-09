@@ -6,8 +6,11 @@ $ErrorActionPreference = 'Stop'
 $Name = "cmake-$Version-windows-$Architecture.zip"
 $Base = "https://github.com/Kitware/CMake/releases/download/v$Version"
 $Destination = Join-Path $env:RUNNER_TEMP 'linkerbot-cmake'
-Invoke-WebRequest "$Base/$Name" -OutFile "$env:RUNNER_TEMP/$Name"
-Invoke-WebRequest "$Base/cmake-$Version-SHA-256.txt" -OutFile "$env:RUNNER_TEMP/cmake-checksums.txt"
+# GitHub release downloads can return transient 5xx responses on hosted runners.
+# Retry both assets before failing; checksum verification below remains mandatory.
+$DownloadOptions = @{ MaximumRetryCount = 5; RetryIntervalSec = 5; TimeoutSec = 120 }
+Invoke-WebRequest "$Base/$Name" -OutFile "$env:RUNNER_TEMP/$Name" @DownloadOptions
+Invoke-WebRequest "$Base/cmake-$Version-SHA-256.txt" -OutFile "$env:RUNNER_TEMP/cmake-checksums.txt" @DownloadOptions
 $Line = @(Get-Content "$env:RUNNER_TEMP/cmake-checksums.txt" | Where-Object { $_ -match " $([regex]::Escape($Name))$" })
 if ($Line.Count -ne 1) { throw 'CMake checksum entry missing or ambiguous' }
 $Expected = ($Line[0] -split '\s+')[0]
